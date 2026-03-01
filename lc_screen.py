@@ -1,5 +1,4 @@
 import sys
-import termios
 from contextlib import contextmanager
 from typing import Optional
 
@@ -9,7 +8,7 @@ from lc_term import (
     LC_FORCEPAINT,
     Terminal,
 )
-from lc_platform import backend
+from lc_platform import backend, backend_has_api
 from lc_window import (
     LCCell,
     LCWin,
@@ -57,6 +56,9 @@ lc = LCState()
 
 
 def _get_winsize() -> tuple[int, int]:
+    if not backend_has_api():
+        return 24, 80
+
     return backend.get_size(lc)
 
 
@@ -67,6 +69,11 @@ def lc_init() -> Optional[LCWin]:
 
     lc.stdscr = lc_new(rows, cols, 0, 0)
     if lc.stdscr is None:
+        return None
+
+    if not backend_has_api():
+        lc_free(lc.stdscr)
+        lc.stdscr = None
         return None
 
     if backend.init(lc) != 0:
@@ -194,53 +201,45 @@ def lc_check_resize() -> int:
 
 
 def _apply_term() -> int:
+    if not backend_has_api():
+        return -1
     return backend.apply_term(lc)
 
 
 def lc_raw() -> int:
-    if lc.cur_term is None:
+    if not backend_has_api():
         return -1
-    lc.cur_term[3] &= ~(termios.ICANON | termios.ISIG | termios.ECHO)
-    lc.cur_term[6][termios.VMIN] = 1
-    lc.cur_term[6][termios.VTIME] = 0
-    return _apply_term()
+    return backend.raw(lc)
 
 
 def lc_noraw() -> int:
-    if lc.cur_term is None:
+    if not backend_has_api():
         return -1
-    lc.cur_term[3] |= (termios.ICANON | termios.ISIG)
-    return _apply_term()
+    return backend.noraw(lc)
 
 
 def lc_cbreak() -> int:
-    if lc.cur_term is None:
+    if not backend_has_api():
         return -1
-    lc.cur_term[3] &= ~termios.ICANON
-    lc.cur_term[6][termios.VMIN] = 1
-    lc.cur_term[6][termios.VTIME] = 0
-    return _apply_term()
+    return backend.cbreak(lc)
 
 
 def lc_nocbreak() -> int:
-    if lc.cur_term is None:
+    if not backend_has_api():
         return -1
-    lc.cur_term[3] |= termios.ICANON
-    return _apply_term()
+    return backend.nocbreak(lc)
 
 
 def lc_echo() -> int:
-    if lc.cur_term is None:
+    if not backend_has_api():
         return -1
-    lc.cur_term[3] |= termios.ECHO
-    return _apply_term()
+    return backend.echo(lc)
 
 
 def lc_noecho() -> int:
-    if lc.cur_term is None:
+    if not backend_has_api():
         return -1
-    lc.cur_term[3] &= ~termios.ECHO
-    return _apply_term()
+    return backend.noecho(lc)
 
 
 def lc_keypad(on: bool) -> int:

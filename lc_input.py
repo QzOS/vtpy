@@ -1,5 +1,4 @@
 from typing import Optional
-
 from lc_screen import lc
 from lc_platform import backend
 

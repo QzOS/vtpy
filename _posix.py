@@ -30,6 +30,7 @@ def init(state) -> int:
 
     state.resize_pending = False
     state._prev_winch_handler = None
+    state._last_size = get_size(state)
     state._resize_poll_fallback = False
 
     try:
@@ -63,6 +64,7 @@ def end(state) -> int:
     state._prev_winch_handler = None
     state.in_fd = 0
     state.out_fd = 1
+    state._last_size = None
     state._resize_poll_fallback = False
     return 0
 
@@ -150,6 +152,52 @@ def apply_term(state) -> int:
         return 0
     except (OSError, ValueError):
         return -1
+
+
+def raw(state) -> int:
+    if state.cur_term is None:
+        return -1
+    state.cur_term[3] &= ~(termios.ICANON | termios.ISIG | termios.ECHO)
+    state.cur_term[6][termios.VMIN] = 1
+    state.cur_term[6][termios.VTIME] = 0
+    return apply_term(state)
+
+
+def noraw(state) -> int:
+    if state.cur_term is None:
+        return -1
+    state.cur_term[3] |= (termios.ICANON | termios.ISIG)
+    return apply_term(state)
+
+
+def cbreak(state) -> int:
+    if state.cur_term is None:
+        return -1
+    state.cur_term[3] &= ~termios.ICANON
+    state.cur_term[6][termios.VMIN] = 1
+    state.cur_term[6][termios.VTIME] = 0
+    return apply_term(state)
+
+
+def nocbreak(state) -> int:
+    if state.cur_term is None:
+        return -1
+    state.cur_term[3] |= termios.ICANON
+    return apply_term(state)
+
+
+def echo(state) -> int:
+    if state.cur_term is None:
+        return -1
+    state.cur_term[3] |= termios.ECHO
+    return apply_term(state)
+
+
+def noecho(state) -> int:
+    if state.cur_term is None:
+        return -1
+    state.cur_term[3] &= ~termios.ECHO
+    return apply_term(state)
 
 
 def _on_sigwinch(signum, frame) -> None:
