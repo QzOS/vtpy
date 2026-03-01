@@ -7,7 +7,6 @@ import ctypes
 import ctypes.wintypes
 import msvcrt
 import os
-import sys
 import threading
 import time
 from typing import Optional
@@ -16,6 +15,7 @@ from typing import Optional
 _STD_INPUT_HANDLE = -10
 _STD_OUTPUT_HANDLE = -11
 
+_ENABLE_WINDOW_INPUT = 0x0008
 _ENABLE_PROCESSED_INPUT = 0x0001
 _ENABLE_LINE_INPUT = 0x0002
 _ENABLE_ECHO_INPUT = 0x0004
@@ -26,6 +26,10 @@ _ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
 
 _kernel32 = ctypes.windll.kernel32
 
+# INPUT_RECORD.EventType values
+_KEY_EVENT = 0x0001
+_WINDOW_BUFFER_SIZE_EVENT = 0x0004
+
 
 def _handle(std: int):
     return _kernel32.GetStdHandle(std)
@@ -34,24 +38,39 @@ def _handle(std: int):
 _resize_lock = threading.Lock()
 
 
-def _start_resize_monitor(state) -> None:
-    """Start background resize monitor for a state instance."""
-    state._resize_stop = threading.Event()
-    state._last_size = get_size(state)
-    state._resize_thread = threading.Thread(
-        target=_poll_resize,
-        args=(state,),
-        daemon=True,
-        name="lc-win-resize",
-    )
-    state._resize_thread.start()
+class _COORD(ctypes.Structure):
+    _fields_ = [
+        ("X", ctypes.wintypes.SHORT),
+        ("Y", ctypes.wintypes.SHORT),
+    ]
+
+
+class _WINDOW_BUFFER_SIZE_RECORD(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", _COORD),
+    ]
+
+
+class _INPUT_RECORD_EVENT(ctypes.Union):
+    _fields_ = [
+        ("WindowBufferSizeEvent", _WINDOW_BUFFER_SIZE_RECORD),
+        ("_padding", ctypes.c_byte * 16),
+    ]
+
+
+class _INPUT_RECORD(ctypes.Structure):
+    _anonymous_ = ("Event",)
+    _fields_ = [
+        ("EventType", ctypes.wintypes.WORD),
+        ("Event", _INPUT_RECORD_EVENT),
+    ]
 
 
 def init(state) -> int:
     """Initialize terminal for Windows console with VT processing."""
 
-    state.in_fd = sys.stdin.fileno()
-    state.out_fd = sys.stdout.fileno()
+    state.in_fd = 0
+    state.out_fd = 1
     state.term.out_fd = state.out_fd
 
     hin = _handle(_STD_INPUT_HANDLE)
@@ -61,10 +80,7 @@ def init(state) -> int:
     if hin in (None, 0, -1) or hout in (None, 0, -1):
         return -1
 
-    state._resize_thread = None
-    state._resize_stop = None
     state._last_size = (24, 80)
-
     # Save original console modes
     orig_in_mode = ctypes.wintypes.DWORD()
     if not _kernel32.GetConsoleMode(hin, ctypes.byref(orig_in_mode)):
@@ -90,22 +106,19 @@ def init(state) -> int:
     # cbreak-like: disable line input and echo, enable VT input
     new_in_mode = (
         (orig_in_mode.value & ~_ENABLE_LINE_INPUT & ~_ENABLE_ECHO_INPUT)
+        | _ENABLE_WINDOW_INPUT
         | _ENABLE_VIRTUAL_TERMINAL_INPUT
     )
     if not _kernel32.SetConsoleMode(hin, new_in_mode):
         return -1
 
-    # Start resize polling thread
     state.resize_pending = False
-    _start_resize_monitor(state)
+    state._last_size = get_size(state)
     return 0
 
 
 def end(state) -> int:
     """Restore terminal to original state."""
-
-    # Stop resize polling thread
-    _stop_resize_monitor(state)
 
     if state.orig_term is not None:
         orig_in_mode, orig_out_mode, hin, hout = state.orig_term
@@ -119,7 +132,6 @@ def end(state) -> int:
     state.cur_term = None
     with _resize_lock:
         state.resize_pending = False
-    state._resize_stop = None
     state._last_size = (24, 80)
     state.in_fd = 0
     state.out_fd = 1
@@ -144,6 +156,8 @@ def read_byte(state):
         state.pushback_byte = None
         return ch
 
+    _drain_resize_events(state)
+
     # Use msvcrt for console input on Windows.
     while True:
         try:
@@ -153,6 +167,7 @@ def read_byte(state):
                     return ch[0]
                 # Empty getch response should not happen; retry.
             else:
+                _drain_resize_events(state)
                 # No input available; yield to other threads.
                 time.sleep(0.001)
         except (OSError, ValueError):
@@ -169,11 +184,14 @@ def input_pending(state, timeout_ms: int) -> bool:
     if state.pushback_byte is not None:
         return True
 
+    _drain_resize_events(state)
+
     if timeout_ms < 0:
         try:
             while True:
                 if msvcrt.kbhit():
                     return True
+                _drain_resize_events(state)
                 time.sleep(0.01)
         except (OSError, ValueError):
             return False
@@ -188,6 +206,7 @@ def input_pending(state, timeout_ms: int) -> bool:
             while time.monotonic() < deadline:
                 if msvcrt.kbhit():
                     return True
+                _drain_resize_events(state)
                 time.sleep(0.001)
         except (OSError, ValueError):
             return False
@@ -216,34 +235,49 @@ def apply_term(state) -> int:
     return 0
 
 
-def _stop_resize_monitor(state) -> None:
-    """Stop background resize monitor for a state instance."""
-    stop = getattr(state, "_resize_stop", None)
-    thread = getattr(state, "_resize_thread", None)
+def _drain_resize_events(state) -> None:
+    """Consume pending resize events from the console input buffer.
 
-    if stop is not None:
-        stop.set()
-    if thread is not None:
-        thread.join(timeout=1.0)
-        state._resize_thread = None
-
-
-def _poll_resize(state) -> None:
-    """Poll terminal size changes and set resize_pending."""
-    stop = getattr(state, "_resize_stop", None)
-    if stop is None:
+    This is opportunistic, not asynchronous: resize is noticed only when
+    the caller enters an input path.
+    """
+    if state.orig_term is None:
         return
 
-    while not stop.is_set():
-        try:
-            sz = os.get_terminal_size(state.out_fd)
-            current_size = (sz.lines, sz.columns)
-            if current_size[0] > 0 and current_size[1] > 0:
-                if current_size != state._last_size:
-                    state._last_size = current_size
-                    with _resize_lock:
-                        state.resize_pending = True
-        except (OSError, ValueError):
-            pass
+    hin = state.orig_term[2]
+    records = (_INPUT_RECORD * 32)()
+    count = ctypes.wintypes.DWORD()
 
-        stop.wait(0.25)
+    while True:
+        try:
+            if not _kernel32.PeekConsoleInputW(hin, records, len(records), ctypes.byref(count)):
+                return
+            if count.value == 0:
+                return
+
+            consumed = 0
+            saw_resize = False
+
+            for i in range(count.value):
+                rec = records[i]
+                if rec.EventType == _WINDOW_BUFFER_SIZE_EVENT:
+                    saw_resize = True
+                    consumed += 1
+                    continue
+                break
+
+            if consumed == 0:
+                return
+
+            if not _kernel32.ReadConsoleInputW(hin, records, consumed, ctypes.byref(count)):
+                return
+
+            if saw_resize:
+                current_size = get_size(state)
+                if current_size[0] > 0 and current_size[1] > 0:
+                    if current_size != state._last_size:
+                        state._last_size = current_size
+                        with _resize_lock:
+                            state.resize_pending = True
+        except (OSError, ValueError):
+            return
