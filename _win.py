@@ -161,6 +161,18 @@ _kernel32.WaitForSingleObject.argtypes = [
 ]
 _kernel32.WaitForSingleObject.restype = ctypes.wintypes.DWORD
 
+_kernel32.GetNumberOfConsoleInputEvents.argtypes = [
+    ctypes.wintypes.HANDLE,
+    ctypes.POINTER(ctypes.wintypes.DWORD),
+]
+_kernel32.GetNumberOfConsoleInputEvents.restype = ctypes.wintypes.BOOL
+
+
+_MAX_EVENT_BATCH = 128
+_MAX_DRAIN_BATCHES = 8
+_DRAIN_ON_INPUT_READY = 2
+_DRAIN_ON_RESIZE_READY = 2
+
 
 def _handle(std: int):
     return _kernel32.GetStdHandle(std)
@@ -194,6 +206,29 @@ def _set_console_mode(handle, mode: int) -> bool:
         return bool(_kernel32.SetConsoleMode(handle, int(mode)))
     except (OSError, ValueError, TypeError):
         return False
+
+
+def _get_console_mode(handle):
+    if not _valid_handle(handle):
+        return None
+
+    mode = ctypes.wintypes.DWORD()
+    try:
+        if not _kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return None
+    except (OSError, ValueError, TypeError):
+        return None
+    return int(mode.value)
+
+
+def _get_console_input_event_count(handle) -> int:
+    count = ctypes.wintypes.DWORD()
+    try:
+        if not _kernel32.GetNumberOfConsoleInputEvents(handle, ctypes.byref(count)):
+            return -1
+    except (OSError, ValueError, TypeError):
+        return -1
+    return int(count.value)
 
 
 def _update_input_mode(state, clear_mask: int = 0, set_mask: int = 0) -> int:
@@ -370,12 +405,12 @@ def input_pending(state, timeout_ms: int) -> bool:
     if _peek_input_byte(state):
         return True
 
-    if _read_console_events(state, block=False) < 0:
-        return False
-    if _peek_input_byte(state):
-        return True
+    rc = _wait_console_input(state, 0)
+    if rc == _WAIT_TIMEOUT:
+        if timeout_ms == 0:
+            return False
+        rc = _wait_console_input(state, timeout_ms)
 
-    rc = _wait_console_input(state, timeout_ms)
     if rc == _WAIT_TIMEOUT:
         return False
     if rc != _WAIT_OBJECT_0:
@@ -388,8 +423,19 @@ def input_pending(state, timeout_ms: int) -> bool:
 
 def poll_resize(state) -> bool:
     """Check if a resize event occurred."""
+    with _resize_lock:
+        if state.resize_pending:
+            return True
+
+    rc = _wait_console_input(state, 0)
+    if rc == _WAIT_TIMEOUT:
+        return False
+    if rc != _WAIT_OBJECT_0:
+        return False
+
     if _read_console_events(state, block=False) < 0:
         return False
+
     with _resize_lock:
         return bool(state.resize_pending)
 
@@ -420,7 +466,11 @@ def apply_term(state) -> int:
     except (TypeError, ValueError):
         return -1
 
-    prev_out_mode = int(cur_term[1])
+    prev_in_mode = _get_console_mode(hin)
+    prev_out_mode = _get_console_mode(hout)
+    if prev_in_mode is None or prev_out_mode is None:
+        return -1
+
     new_in_mode = _normalize_input_mode(desired_in_mode)
     new_out_mode = desired_out_mode
 
@@ -430,12 +480,13 @@ def apply_term(state) -> int:
     if not _set_console_mode(hin, new_in_mode):
         try:
             _set_console_mode(hout, prev_out_mode)
+            _set_console_mode(hin, prev_in_mode)
         except (OSError, ValueError, TypeError):
             pass
         return -1
 
-    state.cur_term[0] = new_in_mode
-    state.cur_term[1] = new_out_mode
+    state.cur_term[0] = desired_in_mode
+    state.cur_term[1] = desired_out_mode
     return 0
 
 
@@ -518,27 +569,29 @@ def _read_console_events(state, block: bool) -> int:
     if not _valid_handle(hin):
         return -1
 
-    records = (_INPUT_RECORD * 32)()
-    count = ctypes.wintypes.DWORD()
-
+    batches = 0
     while True:
         try:
             if block:
+                records = (_INPUT_RECORD * _MAX_EVENT_BATCH)()
+                count = ctypes.wintypes.DWORD()
                 ok = _kernel32.ReadConsoleInputW(
                     hin, records, len(records), ctypes.byref(count)
                 )
                 if not ok:
                     return -1
             else:
-                ok = _kernel32.PeekConsoleInputW(
-                    hin, records, len(records), ctypes.byref(count)
-                )
-                if not ok:
+                queued = _get_console_input_event_count(hin)
+                if queued < 0:
                     return -1
-                if count.value == 0:
+                if queued == 0:
                     return 0
+
+                nread = min(queued, _MAX_EVENT_BATCH)
+                records = (_INPUT_RECORD * nread)()
+                count = ctypes.wintypes.DWORD()
                 ok = _kernel32.ReadConsoleInputW(
-                    hin, records, count.value, ctypes.byref(count)
+                    hin, records, nread, ctypes.byref(count)
                 )
                 if not ok:
                     return -1
@@ -546,13 +599,31 @@ def _read_console_events(state, block: bool) -> int:
             for i in range(count.value):
                 _handle_console_record(state, records[i])
 
-            if block:
-                with _resize_lock:
-                    resize_pending = bool(state.resize_pending)
-                if _peek_input_byte(state) or resize_pending:
-                    return 1
+            have_input = _peek_input_byte(state)
+            with _resize_lock:
+                resize_pending = bool(state.resize_pending)
 
-            if not block:
+            if block:
+                if have_input or resize_pending:
+                    return 1
+                continue
+
+            if have_input:
+                batches += 1
+                if batches >= _DRAIN_ON_INPUT_READY:
+                    return 1
+            elif resize_pending:
+                batches += 1
+                if batches >= _DRAIN_ON_RESIZE_READY:
+                    return 1
+            else:
+                batches += 1
+
+            if batches >= _MAX_DRAIN_BATCHES:
+                return 1
+
+            queued = _get_console_input_event_count(hin)
+            if queued <= 0:
                 return 1
         except (OSError, ValueError):
             return -1
