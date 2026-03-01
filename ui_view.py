@@ -2,7 +2,15 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from lc_term import LC_ATTR_NONE
-from lc_window import LCWin, lc_subwin, lc_wclear, lc_wdraw_panel, lc_wfill, lc_wmove, lc_waddstr
+from lc_window import (
+    LCWin,
+    lc_subwin,
+    lc_wclear,
+    lc_wdraw_panel,
+    lc_wfill,
+    lc_wmove,
+    lc_waddstr,
+)
 from ui_layout import (
     UIRect,
     ui_rect,
@@ -38,6 +46,13 @@ UI_VIEWKIND_CONTAINER = 2
 UI_VIEWKIND_PANEL = 3
 UI_VIEWKIND_LABEL = 4
 
+UI_BIND_CONTENT = 0
+UI_BIND_FRAME = 1
+
+UI_ALIGN_LEFT = 0
+UI_ALIGN_CENTER = 1
+UI_ALIGN_RIGHT = 2
+
 
 @dataclass
 class UIDrawContext:
@@ -55,6 +70,7 @@ class UIView:
     title: str = ""
     attr: int = LC_ATTR_NONE
     has_focus: bool = False
+    bind_policy: int = UI_BIND_CONTENT
     bound_win: Optional[LCWin] = None
     kind: int = UI_VIEWKIND_GENERIC
     min_height: int = 0
@@ -67,7 +83,7 @@ class UIView:
     fill_attr: int = LC_ATTR_NONE
     text: str = ""
     text_attr: int = LC_ATTR_NONE
-    text_align: int = 0
+    text_align: int = UI_ALIGN_LEFT
     user_data: object = None
 
     def is_visible(self) -> bool:
@@ -118,6 +134,7 @@ def ui_view_create(
         id=view_id,
         frame_rect=ui_rect(y, x, height, width),
         content_rect=ui_rect(y, x, height, width),
+        bind_policy=UI_BIND_CONTENT,
         kind=kind,
         flags=flags,
     )
@@ -134,12 +151,13 @@ def ui_view_create_panel(
     view = ui_view_create(
         view_id, y, x, height, width, panel=True, container=True, kind=UI_VIEWKIND_PANEL
     )
+    view.bind_policy = UI_BIND_FRAME
     view.title = title
     return view
 
 
 def ui_view_create_root(view_id: str = "root") -> UIView:
-    return ui_view_create(
+    view = ui_view_create(
         view_id,
         0,
         0,
@@ -148,6 +166,8 @@ def ui_view_create_root(view_id: str = "root") -> UIView:
         container=True,
         kind=UI_VIEWKIND_ROOT,
     )
+    view.bind_policy = UI_BIND_FRAME
+    return view
 
 
 def ui_view_create_container(
@@ -163,6 +183,10 @@ def ui_view_create_container(
     view = ui_view_create(
         view_id, y, x, height, width, panel=panel, container=True, kind=kind
     )
+    if panel:
+        view.bind_policy = UI_BIND_FRAME
+    else:
+        view.bind_policy = UI_BIND_CONTENT
     view.title = title
     return view
 
@@ -186,6 +210,7 @@ def ui_view_create_label(
         container=False,
         kind=UI_VIEWKIND_LABEL,
     )
+    view.bind_policy = UI_BIND_CONTENT
     view.text = text
     return view
 
@@ -254,19 +279,26 @@ def ui_view_mark_dirty(view: Optional[UIView]) -> None:
         cur = cur.parent
 
 
-def ui_view_bind_window(
-    parent_win: Optional[LCWin],
-    view: Optional[UIView],
-) -> Optional[LCWin]:
+def ui_view_bind_rect(parent_win: Optional[LCWin], rect: UIRect) -> Optional[LCWin]:
+    if parent_win is None or rect is None:
+        return None
+    if rect.height <= 0 or rect.width <= 0:
+        return None
+    return lc_subwin(parent_win, rect.height, rect.width, rect.y, rect.x)
+
+
+def ui_view_bind_window(parent_win: Optional[LCWin], view: Optional[UIView]) -> Optional[LCWin]:
     r = None
 
     if parent_win is None or view is None:
         return None
 
-    r = view.content_rect
-    if r.height <= 0 or r.width <= 0:
-        return None
-    return lc_subwin(parent_win, r.height, r.width, r.y, r.x)
+    if view.bind_policy == UI_BIND_FRAME:
+        r = view.frame_rect
+    else:
+        r = view.content_rect
+
+    return ui_view_bind_rect(parent_win, r)
 
 
 def ui_view_bind_root_window(
@@ -334,9 +366,10 @@ def ui_view_layout_children(view: Optional[UIView]) -> int:
         return ui_layout_stack_vertical(view.content_rect, view.children, view.layout_gap)
 
     for child in view.children:
-        child.content_rect = ui_rect(
+        child.frame_rect = ui_rect(
             child.frame_rect.y, child.frame_rect.x, child.frame_rect.height, child.frame_rect.width
         )
+        child.content_rect = ui_rect_copy(child.frame_rect)
 
     return 0
 
@@ -420,6 +453,17 @@ def ui_view_collect_focusable(view: Optional[UIView], out: list[UIView]) -> None
         ui_view_collect_focusable(child, out)
 
 
+def ui_view_draw_rect(view: UIView) -> UIRect:
+    if view.bind_policy == UI_BIND_FRAME:
+        return view.frame_rect
+    return view.content_rect
+
+
+def ui_view_draw_size(view: UIView) -> tuple[int, int]:
+    r = ui_view_draw_rect(view)
+    return r.height, r.width
+
+
 def ui_view_handle_event(view: Optional[UIView], ev: UIEvent) -> int:
     if view is None or ev is None:
         return UI_CMD_NONE
@@ -443,7 +487,7 @@ def ui_view_handle_event(view: Optional[UIView], ev: UIEvent) -> int:
 
 
 def _ui_view_draw_label(view: UIView) -> int:
-    r = view.content_rect
+    r = ui_view_draw_rect(view)
     text = view.text
     x = 0
 
@@ -467,9 +511,9 @@ def _ui_view_draw_label(view: UIView) -> int:
     if not text or r.height <= 0 or r.width <= 0:
         return 0
 
-    if view.text_align == 1:
+    if view.text_align == UI_ALIGN_CENTER:
         x = max(0, (r.width - len(text)) // 2)
-    elif view.text_align == 2:
+    elif view.text_align == UI_ALIGN_RIGHT:
         x = max(0, r.width - len(text))
     else:
         x = 0
@@ -480,7 +524,7 @@ def _ui_view_draw_label(view: UIView) -> int:
 
 
 def _ui_view_draw_panel(view: UIView) -> int:
-    r = view.frame_rect
+    r = ui_view_draw_rect(view)
     if view.bound_win is None:
         return -1
     return lc_wdraw_panel(
@@ -497,7 +541,7 @@ def _ui_view_draw_panel(view: UIView) -> int:
 
 
 def _ui_view_draw_container(view: UIView) -> int:
-    r = view.content_rect
+    r = ui_view_draw_rect(view)
     if view.bound_win is None:
         return -1
     if ui_rect_is_empty(r):
@@ -536,7 +580,8 @@ def ui_view_draw(view: Optional[UIView]) -> int:
     if view.bound_win is None:
         return -1
 
-    if ui_view_draw_self(view) != 0:
+    ctx.is_root = (view.parent is None)
+    if ui_view_draw_self(view, ctx) != 0:
         return -1
     view.clear_dirty()
 
