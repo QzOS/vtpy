@@ -98,6 +98,34 @@ def _interior_rect(y: int, x: int, height: int, width: int) -> tuple[int, int, i
     return y + 1, x + 1, height - 2, width - 2
 
 
+def _write_text_clipped(
+    win: Optional[LCWin],
+    y: int,
+    x: int,
+    text: str,
+    attr: int,
+) -> int:
+    if win is None:
+        return -1
+    if text is None:
+        return -1
+    if y < 0 or y >= win.maxy:
+        return 0
+    if not text:
+        return 0
+
+    ln, start, end = _clip_hspan(win, y, x, len(text))
+    if ln is None or start >= end:
+        return 0
+
+    src_off = start - x
+    for i, cx in enumerate(range(start, end)):
+        ln.line[cx].ch = text[src_off + i]
+        ln.line[cx].attr = attr
+    mark_dirty(ln, start, end, win.maxx)
+    return 0
+
+
 def _write_cell(win: Optional[LCWin], y: int, x: int, ch: str, attr: int) -> None:
     if win is None:
         return
@@ -120,6 +148,29 @@ def _advance_cursor(win: LCWin) -> None:
             win.cury += 1
         else:
             win.cury = win.maxy  # Signal that we've wrapped on the last row
+
+
+def _box_title_span(
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+    title: str,
+) -> tuple[int, int, str]:
+    top, left, _bottom, right = _box_edges(y, x, height, width)
+    if title is None:
+        title = ""
+
+    label = f" {title} "
+    inner_left = left + 1
+    inner_right = right - 1
+    if inner_left > inner_right:
+        return top, inner_left, ""
+
+    usable = inner_right - inner_left + 1
+    if usable <= 0:
+        return top, inner_left, ""
+    return top, inner_left, label[:usable]
 
 
 def mark_dirty(ln: Optional[LCRow], start: int, end: int, maxx: int) -> None:
@@ -177,7 +228,15 @@ def lc_free(win: Optional[LCWin]) -> int:
     return 0
 
 
-def fill_rect(win: Optional[LCWin], y0: int, x0: int, y1: int, x1: int, ch: str) -> None:
+def fill_rect(
+    win: Optional[LCWin],
+    y0: int,
+    x0: int,
+    y1: int,
+    x1: int,
+    ch: str,
+    attr: int = LC_ATTR_NONE,
+) -> None:
     if win is None:
         return
     if not ch:
@@ -191,7 +250,7 @@ def fill_rect(win: Optional[LCWin], y0: int, x0: int, y1: int, x1: int, ch: str)
         ln = win.lines[y]
         for x in range(xs, xe):
             ln.line[x].ch = ch
-            ln.line[x].attr = LC_ATTR_NONE
+            ln.line[x].attr = attr
 
         mark_dirty(ln, xs, xe, win.maxx)
 
@@ -199,7 +258,7 @@ def fill_rect(win: Optional[LCWin], y0: int, x0: int, y1: int, x1: int, ch: str)
 def lc_wclear(win: Optional[LCWin]) -> int:
     if win is None:
         return -1
-    fill_rect(win, 0, 0, win.maxy, win.maxx, ' ')
+    fill_rect(win, 0, 0, win.maxy, win.maxx, ' ', LC_ATTR_NONE)
     win.cury = 0
     win.curx = 0
     return 0
@@ -211,16 +270,35 @@ def lc_wclrtobot(win: Optional[LCWin]) -> int:
 
     y = win.cury
     x = win.curx
-    fill_rect(win, y, x, y + 1, win.maxx, ' ')
+    fill_rect(win, y, x, y + 1, win.maxx, ' ', LC_ATTR_NONE)
     if y + 1 < win.maxy:
-        fill_rect(win, y + 1, 0, win.maxy, win.maxx, ' ')
+        fill_rect(win, y + 1, 0, win.maxy, win.maxx, ' ', LC_ATTR_NONE)
     return 0
 
 
 def lc_wclrtoeol(win: Optional[LCWin]) -> int:
     if win is None:
         return -1
-    fill_rect(win, win.cury, win.curx, win.cury + 1, win.maxx, ' ')
+    fill_rect(win, win.cury, win.curx, win.cury + 1, win.maxx, ' ', LC_ATTR_NONE)
+    return 0
+
+
+def lc_wfill(
+    win: Optional[LCWin],
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+    ch: str = ' ',
+    attr: int = LC_ATTR_NONE,
+) -> int:
+    if win is None:
+        return -1
+    if not ch:
+        return -1
+    if height <= 0 or width <= 0:
+        return 0
+    fill_rect(win, y, x, y + height, x + width, ch[0], attr)
     return 0
 
 
@@ -379,5 +457,71 @@ def lc_wdraw_box(
     _write_cell(win, top, right, tr, attr)
     _write_cell(win, bottom, left, bl, attr)
     _write_cell(win, bottom, right, br, attr)
+
+    return 0
+
+
+def lc_wdraw_box_title(
+    win: Optional[LCWin],
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+    title: str,
+    attr: int = LC_ATTR_NONE,
+) -> int:
+    if win is None:
+        return -1
+
+    y, x, height, width = _normalize_rect(y, x, height, width)
+    if height <= 0 or width <= 0:
+        return 0
+    if title is None:
+        return -1
+    if height < 1 or width < 1:
+        return 0
+
+    title_y, title_x, label = _box_title_span(y, x, height, width, title)
+    if not label:
+        return 0
+
+    return _write_text_clipped(win, title_y, title_x, label, attr)
+
+
+def lc_wdraw_panel(
+    win: Optional[LCWin],
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+    title: Optional[str] = None,
+    frame_attr: int = LC_ATTR_NONE,
+    fill: Optional[str] = None,
+    fill_attr: int = LC_ATTR_NONE,
+    hch: str = "-",
+    vch: str = "|",
+    tl: str = "+",
+    tr: str = "+",
+    bl: str = "+",
+    br: str = "+",
+) -> int:
+    if win is None:
+        return -1
+
+    rc = lc_wdraw_box(win, y, x, height, width, frame_attr, hch, vch, tl, tr, bl, br)
+    if rc != 0:
+        return rc
+
+    if title is not None and title != "":
+        rc = lc_wdraw_box_title(win, y, x, height, width, title, frame_attr)
+        if rc != 0:
+            return rc
+
+    if fill is not None:
+        inner_y, inner_x, inner_h, inner_w = _interior_rect(y, x, height, width)
+        if inner_h > 0 and inner_w > 0:
+            rc = lc_wfill(win, inner_y, inner_x, inner_h, inner_w, fill, fill_attr)
+            if rc != 0:
+                return rc
 
     return 0

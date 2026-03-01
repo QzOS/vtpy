@@ -13,10 +13,13 @@ from lc_window import (
     LCCell,
     LCWin,
     lc_free,
+    lc_wfill,
     lc_mvwaddstr,
     lc_new,
     lc_waddstr,
+    lc_wdraw_panel,
     lc_wdraw_box,
+    lc_wdraw_box_title,
     lc_wdraw_hline,
     lc_wdraw_vline,
     lc_wmove,
@@ -273,6 +276,19 @@ def lc_put_attr(ch: int, attr: int) -> int:
     return lc_wput(lc.stdscr, ch, attr)
 
 
+def lc_fill(
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+    ch: str = " ",
+    attr: int = LC_ATTR_NONE,
+) -> int:
+    if lc.stdscr is None:
+        return -1
+    return lc_wfill(lc.stdscr, y, x, height, width, ch, attr)
+
+
 def lc_center_x(width: int, text: str) -> int:
     if width <= 0:
         return 0
@@ -312,6 +328,53 @@ def lc_draw_box(
     if lc.stdscr is None:
         return -1
     return lc_wdraw_box(lc.stdscr, y, x, height, width, attr, hch, vch, tl, tr, bl, br)
+
+
+def lc_draw_box_title(
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+    title: str,
+    attr: int = LC_ATTR_NONE,
+) -> int:
+    if lc.stdscr is None:
+        return -1
+    return lc_wdraw_box_title(
+        lc.stdscr, y, x, height, width, title, attr
+    )
+
+
+def lc_draw_panel(
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+    title: Optional[str] = None,
+    frame_attr: int = LC_ATTR_NONE,
+    fill: Optional[str] = None,
+    fill_attr: int = LC_ATTR_NONE,
+    hch: str = "-",
+    vch: str = "|",
+    tl: str = "+",
+    tr: str = "+",
+    bl: str = "+",
+    br: str = "+",
+) -> int:
+    if lc.stdscr is None:
+        return -1
+    return lc_wdraw_panel(
+        lc.stdscr,
+        y,
+        x,
+        height,
+        width,
+        title,
+        frame_attr,
+        fill,
+        fill_attr,
+        hch, vch, tl, tr, bl, br,
+    )
 
 
 def lc_addstr_at(y: int, x: int, s: str) -> int:
