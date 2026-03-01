@@ -77,6 +77,27 @@ def _clip_rect(win: Optional[LCWin], y0: int, x0: int, y1: int, x1: int) -> tupl
     return ys, xs, ye, xe
 
 
+def _normalize_rect(y: int, x: int, height: int, width: int) -> tuple[int, int, int, int]:
+    if height <= 0 or width <= 0:
+        return y, x, 0, 0
+    return y, x, height, width
+
+
+def _box_edges(y: int, x: int, height: int, width: int) -> tuple[int, int, int, int]:
+    top = y
+    left = x
+    bottom = y + height - 1
+    right = x + width - 1
+    return top, left, bottom, right
+
+
+def _interior_rect(y: int, x: int, height: int, width: int) -> tuple[int, int, int, int]:
+    y, x, height, width = _normalize_rect(y, x, height, width)
+    if height <= 2 or width <= 2:
+        return y + 1, x + 1, 0, 0
+    return y + 1, x + 1, height - 2, width - 2
+
+
 def _write_cell(win: Optional[LCWin], y: int, x: int, ch: str, attr: int) -> None:
     if win is None:
         return
@@ -220,6 +241,7 @@ def lc_waddstr(win: Optional[LCWin], s: str) -> int:
         ln.line[win.curx].attr = LC_ATTR_NONE
         mark_dirty(ln, win.curx, win.curx + 1, win.maxx)
         _advance_cursor(win)
+
     # Ensure cursor is within valid bounds after loop
     if win.cury >= win.maxy:
         win.cury = win.maxy - 1
@@ -330,6 +352,8 @@ def lc_wdraw_box(
 ) -> int:
     if win is None:
         return -1
+
+    y, x, height, width = _normalize_rect(y, x, height, width)
     if not hch or not vch or not tl or not tr or not bl or not br:
         return -1
     if height <= 0 or width <= 0:
@@ -341,16 +365,19 @@ def lc_wdraw_box(
     if width == 1:
         return lc_wdraw_vline(win, y, x, height, vch, attr)
 
-    bottom_y = y + height - 1
-    right_x = x + width - 1
+    top, left, bottom, right = _box_edges(y, x, height, width)
+    inner_y, inner_x, inner_h, inner_w = _interior_rect(y, x, height, width)
 
-    lc_wdraw_hline(win, y, x + 1, width - 2, hch, attr)
-    lc_wdraw_hline(win, bottom_y, x + 1, width - 2, hch, attr)
-    lc_wdraw_vline(win, y + 1, x, height - 2, vch, attr)
-    lc_wdraw_vline(win, y + 1, right_x, height - 2, vch, attr)
+    lc_wdraw_hline(win, top, left + 1, width - 2, hch, attr)
+    lc_wdraw_hline(win, bottom, left + 1, width - 2, hch, attr)
 
-    _write_cell(win, y, x, tl, attr)
-    _write_cell(win, y, right_x, tr, attr)
-    _write_cell(win, bottom_y, x, bl, attr)
-    _write_cell(win, bottom_y, right_x, br, attr)
+    if inner_h > 0:
+        lc_wdraw_vline(win, inner_y, left, inner_h, vch, attr)
+        lc_wdraw_vline(win, inner_y, right, inner_h, vch, attr)
+
+    _write_cell(win, top, left, tl, attr)
+    _write_cell(win, top, right, tr, attr)
+    _write_cell(win, bottom, left, bl, attr)
+    _write_cell(win, bottom, right, br, attr)
+
     return 0

@@ -1,5 +1,8 @@
 from lc_term import LC_ATTR_NONE
 from lc_window import (
+    _box_edges,
+    _interior_rect,
+    _normalize_rect,
     fill_rect,
     lc_new,
     lc_waddstr,
@@ -133,3 +136,26 @@ def test_box_degenerate_width_one_clips():
     assert _row_text(win, 1) == "  | "
     assert _row_text(win, 2) == "  | "
     assert _row_text(win, 3) == "    "
+
+
+def test_normalize_rect_keeps_positive_rect():
+    assert _normalize_rect(2, 3, 4, 5) == (2, 3, 4, 5)
+
+
+def test_normalize_rect_zeroes_nonpositive_size():
+    assert _normalize_rect(2, 3, 0, 5) == (2, 3, 0, 0)
+    assert _normalize_rect(2, 3, 4, 0) == (2, 3, 0, 0)
+    assert _normalize_rect(2, 3, -1, 5) == (2, 3, 0, 0)
+
+
+def test_box_edges_returns_outer_bounds():
+    assert _box_edges(1, 2, 4, 5) == (1, 2, 4, 6)
+
+
+def test_interior_rect_for_regular_box():
+    assert _interior_rect(1, 2, 4, 5) == (2, 3, 2, 3)
+
+
+def test_interior_rect_for_degenerate_box():
+    assert _interior_rect(1, 2, 2, 5) == (2, 3, 0, 0)
+    assert _interior_rect(1, 2, 5, 2) == (2, 3, 0, 0)
