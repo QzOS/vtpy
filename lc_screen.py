@@ -16,6 +16,7 @@ from lc_window import (
     lc_wfill,
     lc_mvwaddstr,
     lc_new,
+    lc_subwin,
     lc_waddstr,
     lc_wdraw_panel,
     lc_wdraw_box,
@@ -90,6 +91,22 @@ def lc_init() -> Optional[LCWin]:
     lc.cur_attr = LC_ATTR_NONE
 
     return lc.stdscr
+
+
+def lc_subwindow(nlines: int, ncols: int, begin_y: int, begin_x: int) -> Optional[LCWin]:
+    if lc.stdscr is None:
+        return None
+    return lc_subwin(lc.stdscr, nlines, ncols, begin_y, begin_x)
+
+
+def lc_subwindow_from(
+    parent: Optional[LCWin],
+    nlines: int,
+    ncols: int,
+    begin_y: int,
+    begin_x: int,
+) -> Optional[LCWin]:
+    return lc_subwin(parent, nlines, ncols, begin_y, begin_x)
 
 
 def lc_end() -> int:

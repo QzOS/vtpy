@@ -25,6 +25,11 @@ class LCWin:
     begx: int = 0
     cury: int = 0
     curx: int = 0
+    parent: Optional["LCWin"] = None
+    root: Optional["LCWin"] = None
+    pary: int = 0
+    parx: int = 0
+    owns_storage: bool = True
     lines: list[LCRow] = field(default_factory=list)
 
 
@@ -126,6 +131,42 @@ def _write_text_clipped(
     return 0
 
 
+def _mark_window_dirty(win: Optional[LCWin], y: int, start: int, end: int) -> None:
+    cur = win
+    cy = y
+    cs = start
+    ce = end
+
+    while cur is not None:
+        if cy < 0 or cy >= cur.maxy:
+            return
+
+        ln = cur.lines[cy]
+        mark_dirty(ln, cs, ce, cur.maxx)
+
+        parent = cur.parent
+        if parent is None:
+            return
+
+        cy += cur.pary
+        cs += cur.parx
+        ce += cur.parx
+        cur = parent
+
+
+def _set_cell(win: Optional[LCWin], y: int, x: int, ch: str, attr: int) -> None:
+    if win is None:
+        return
+    if y < 0 or y >= win.maxy or x < 0 or x >= win.maxx:
+        return
+    if not ch:
+        return
+
+    win.lines[y].line[x].ch = ch[0]
+    win.lines[y].line[x].attr = attr
+    _mark_window_dirty(win, y, x, x + 1)
+
+
 def _write_cell(win: Optional[LCWin], y: int, x: int, ch: str, attr: int) -> None:
     if win is None:
         return
@@ -134,10 +175,7 @@ def _write_cell(win: Optional[LCWin], y: int, x: int, ch: str, attr: int) -> Non
     if not ch:
         return
 
-    ln = win.lines[y]
-    ln.line[x].ch = ch[0]
-    ln.line[x].attr = attr
-    mark_dirty(ln, x, x + 1, win.maxx)
+    _set_cell(win, y, x, ch[0], attr)
 
 
 def _advance_cursor(win: LCWin) -> None:
@@ -217,7 +255,61 @@ def lc_new(nlines: int, ncols: int, begin_y: int, begin_x: int) -> Optional[LCWi
         begx=begin_x,
         cury=0,
         curx=0,
+        parent=None,
+        root=None,
+        pary=0,
+        parx=0,
+        owns_storage=True,
         lines=lines
+    )
+
+
+def lc_subwin(
+    parent: Optional[LCWin],
+    nlines: int,
+    ncols: int,
+    begin_y: int,
+    begin_x: int,
+) -> Optional[LCWin]:
+    if parent is None:
+        return None
+    if nlines <= 0 or ncols <= 0:
+        return None
+    if begin_y < 0 or begin_x < 0:
+        return None
+    if begin_y >= parent.maxy or begin_x >= parent.maxx:
+        return None
+    if begin_y + nlines > parent.maxy:
+        return None
+    if begin_x + ncols > parent.maxx:
+        return None
+
+    lines: list[LCRow] = []
+    for y in range(nlines):
+        parent_ln = parent.lines[begin_y + y]
+        shared_cells = parent_ln.line[begin_x:begin_x + ncols]
+        row = LCRow(
+            line=shared_cells,
+            firstch=0,
+            lastch=ncols - 1,
+            flags=LC_DIRTY | LC_FORCEPAINT,
+        )
+        lines.append(row)
+
+    root = parent.root if parent.root is not None else parent
+    return LCWin(
+        maxy=nlines,
+        maxx=ncols,
+        begy=parent.begy + begin_y,
+        begx=parent.begx + begin_x,
+        cury=0,
+        curx=0,
+        parent=parent,
+        root=root,
+        pary=begin_y,
+        parx=begin_x,
+        owns_storage=False,
+        lines=lines,
     )
 
 
@@ -249,10 +341,9 @@ def fill_rect(
     for y in range(ys, ye):
         ln = win.lines[y]
         for x in range(xs, xe):
-            ln.line[x].ch = ch
+            ln.line[x].ch = ch[0]
             ln.line[x].attr = attr
-
-        mark_dirty(ln, xs, xe, win.maxx)
+        _mark_window_dirty(win, y, xs, xe)
 
 
 def lc_wclear(win: Optional[LCWin]) -> int:
@@ -314,10 +405,7 @@ def lc_waddstr(win: Optional[LCWin], s: str) -> int:
         if win.cury >= win.maxy:
             win.cury = win.maxy - 1  # Restore cursor to last valid row
             break
-        ln = win.lines[win.cury]
-        ln.line[win.curx].ch = ch
-        ln.line[win.curx].attr = LC_ATTR_NONE
-        mark_dirty(ln, win.curx, win.curx + 1, win.maxx)
+        _set_cell(win, win.cury, win.curx, ch, LC_ATTR_NONE)
         _advance_cursor(win)
 
     # Ensure cursor is within valid bounds after loop
@@ -347,10 +435,7 @@ def lc_wput(win: Optional[LCWin], ch: int, attr: int = LC_ATTR_NONE) -> int:
     except (TypeError, ValueError):
         return -1
 
-    ln = win.lines[win.cury]
-    ln.line[win.curx].ch = outch
-    ln.line[win.curx].attr = attr
-    mark_dirty(ln, win.curx, win.curx + 1, win.maxx)
+    _set_cell(win, win.cury, win.curx, outch, attr)
     _advance_cursor(win)
     return 0
 
@@ -381,9 +466,7 @@ def lc_wdraw_hline(
         return 0
 
     for cx in range(start, end):
-        ln.line[cx].ch = ch[0]
-        ln.line[cx].attr = attr
-    mark_dirty(ln, start, end, win.maxx)
+        _set_cell(win, y, cx, ch[0], attr)
     return 0
 
 
@@ -407,10 +490,7 @@ def lc_wdraw_vline(
         return 0
 
     for cy in range(start, end):
-        ln = win.lines[cy]
-        ln.line[x].ch = ch[0]
-        ln.line[x].attr = attr
-        mark_dirty(ln, x, x + 1, win.maxx)
+        _set_cell(win, cy, x, ch[0], attr)
     return 0
 
 
