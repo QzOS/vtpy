@@ -1,6 +1,9 @@
 from lc_window import (
+    lc_invalidate_children,
     lc_new,
     lc_free,
+    lc_panel_content_rect,
+    lc_panel_subwin,
     lc_subwin,
     lc_waddstr,
     lc_wdraw_box,
@@ -146,3 +149,104 @@ def test_cannot_create_subwindow_from_dead_parent():
     parent = lc_new(4, 4, 0, 0)
     assert lc_free(parent) == 0
     assert lc_subwin(parent, 2, 2, 0, 0) is None
+
+
+def test_panel_content_rect_matches_box_interior():
+    assert lc_panel_content_rect(1, 2, 5, 8) == (2, 3, 3, 6)
+
+
+def test_panel_content_subwin_uses_interior_rect():
+    parent = lc_new(10, 12, 0, 0)
+    sub = lc_panel_subwin(parent, 1, 2, 5, 8)
+
+    assert sub is not None
+    assert sub.parent is parent
+    assert sub.begy == 2
+    assert sub.begx == 3
+    assert sub.maxy == 3
+    assert sub.maxx == 6
+    assert sub.pary == 2
+    assert sub.parx == 3
+
+
+def test_panel_content_subwin_rejects_degenerate_panel():
+    parent = lc_new(6, 6, 0, 0)
+    assert lc_panel_subwin(parent, 0, 0, 1, 4) is None
+    assert lc_panel_subwin(parent, 0, 0, 4, 1) is None
+    assert lc_panel_subwin(parent, 0, 0, 2, 2) is None
+
+
+def test_panel_content_subwin_shares_backing_store():
+    parent = lc_new(6, 10, 0, 0)
+    sub = lc_panel_subwin(parent, 1, 1, 4, 6)
+    assert sub is not None
+
+    assert lc_wfill(sub, 0, 0, sub.maxy, sub.maxx, ".", 7) == 0
+
+    assert _row_text(parent, 0) == "          "
+    assert _row_text(parent, 1) == "          "
+    assert _row_text(parent, 2) == "  ....    "
+    assert _row_text(parent, 3) == "  ....    "
+    assert _row_text(parent, 4) == "          "
+    assert _row_text(parent, 5) == "          "
+    assert parent.lines[2].line[2].attr == 7
+    assert parent.lines[3].line[5].attr == 7
+
+
+def test_panel_content_subwin_nested_under_child_window():
+    parent = lc_new(8, 12, 5, 7)
+    child = lc_subwin(parent, 6, 10, 1, 1)
+    sub = lc_panel_subwin(child, 1, 2, 4, 5)
+    assert child is not None
+    assert sub is not None
+    assert sub.root is parent
+    assert sub.parent is child
+    assert sub.begy == 8
+    assert sub.begx == 11
+
+
+def test_invalidate_children_kills_direct_children():
+    parent = lc_new(6, 6, 0, 0)
+    child1 = lc_subwin(parent, 2, 2, 0, 0)
+    child2 = lc_subwin(parent, 2, 2, 2, 2)
+
+    assert child1 is not None
+    assert child2 is not None
+    assert len(parent.children) == 2
+
+    lc_invalidate_children(parent)
+
+    assert parent.alive is True
+    assert parent.children == []
+    assert child1.alive is False
+    assert child2.alive is False
+    assert child1.lines == []
+    assert child2.lines == []
+
+
+def test_invalidate_children_kills_nested_subtree():
+    parent = lc_new(8, 8, 0, 0)
+    child = lc_subwin(parent, 6, 6, 1, 1)
+    grand = lc_subwin(child, 2, 2, 2, 2)
+
+    assert child is not None
+    assert grand is not None
+
+    lc_invalidate_children(parent)
+
+    assert parent.alive is True
+    assert parent.children == []
+    assert child.alive is False
+    assert grand.alive is False
+
+
+def test_dead_children_fail_after_invalidation():
+    parent = lc_new(6, 6, 0, 0)
+    child = lc_subwin(parent, 2, 2, 1, 1)
+    assert child is not None
+
+    lc_invalidate_children(parent)
+
+    assert lc_wmove(child, 0, 0) == -1
+    assert lc_waddstr(child, "x") == -1
+    assert lc_wfill(child, 0, 0, 1, 1, ".", 1) == -1

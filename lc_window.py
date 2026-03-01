@@ -129,7 +129,7 @@ def _write_text_clipped(
     for i, cx in enumerate(range(start, end)):
         ln.line[cx].ch = text[src_off + i]
         ln.line[cx].attr = attr
-    mark_dirty(ln, start, end, win.maxx)
+    _mark_window_dirty(win, y, start, end)
     return 0
 
 
@@ -327,6 +327,33 @@ def lc_subwin(
     return sub
 
 
+def lc_panel_subwin(
+    parent: Optional[LCWin],
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+) -> Optional[LCWin]:
+    if parent is None:
+        return None
+    if not parent.alive:
+        return None
+
+    y, x, height, width = _normalize_rect(y, x, height, width)
+    if height <= 0 or width <= 0:
+        return None
+
+    inner_y, inner_x, inner_h, inner_w = _interior_rect(y, x, height, width)
+    if inner_h <= 0 or inner_w <= 0:
+        return None
+
+    return lc_subwin(parent, inner_h, inner_w, inner_y, inner_x)
+
+
+def lc_panel_content_rect(y: int, x: int, height: int, width: int) -> tuple[int, int, int, int]:
+    return _interior_rect(y, x, height, width)
+
+
 def _detach_from_parent(win: LCWin) -> None:
     parent = win.parent
     if parent is None:
@@ -349,6 +376,17 @@ def _free_recursive(win: LCWin) -> None:
     win.parx = 0
     win.cury = 0
     win.curx = 0
+
+
+def lc_invalidate_children(win: Optional[LCWin]) -> None:
+    if win is None:
+        return
+    if not win.alive:
+        return
+
+    while win.children:
+        child = win.children[-1]
+        _free_recursive(child)
 
 
 def lc_free(win: Optional[LCWin]) -> int:

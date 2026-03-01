@@ -15,7 +15,10 @@ from lc_window import (
     lc_free,
     lc_wfill,
     lc_mvwaddstr,
+    lc_panel_content_rect,
+    lc_panel_subwin,
     lc_new,
+    lc_invalidate_children,
     lc_subwin,
     lc_waddstr,
     lc_wdraw_panel,
@@ -109,6 +112,31 @@ def lc_subwindow_from(
     return lc_subwin(parent, nlines, ncols, begin_y, begin_x)
 
 
+def lc_panel_content_subwindow(
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+) -> Optional[LCWin]:
+    if lc.stdscr is None:
+        return None
+    return lc_panel_subwin(lc.stdscr, y, x, height, width)
+
+
+def lc_panel_content_subwindow_from(
+    parent: Optional[LCWin],
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+) -> Optional[LCWin]:
+    return lc_panel_subwin(parent, y, x, height, width)
+
+
+def lc_get_panel_content_rect(y: int, x: int, height: int, width: int) -> tuple[int, int, int, int]:
+    return lc_panel_content_rect(y, x, height, width)
+
+
 def lc_end() -> int:
     try:
         lc.term.set_attr(LC_ATTR_NONE)
@@ -173,6 +201,7 @@ def lc_check_resize() -> int:
     if not resize_seen and rows == lc.lines and cols == lc.cols:
         return 0
 
+    lc_invalidate_children(old)
     new_win = lc_new(rows, cols, old.begy, old.begx)
     if new_win is None:
         return -1
