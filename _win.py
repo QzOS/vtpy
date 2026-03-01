@@ -56,6 +56,8 @@ def init(state) -> int:
 
     hin = _handle(_STD_INPUT_HANDLE)
     hout = _handle(_STD_OUTPUT_HANDLE)
+    # Check for invalid handles: None, 0, or -1 (INVALID_HANDLE_VALUE)
+    # 0 is rejected because GetStdHandle can return 0 for detached processes
     if hin in (None, 0, -1) or hout in (None, 0, -1):
         return -1
 

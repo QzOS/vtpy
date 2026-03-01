@@ -43,10 +43,7 @@ def init(state) -> int:
 
 
 def end(state) -> int:
-    try:
-        _resize_states.discard(state)
-    except Exception:
-        pass
+    _resize_states.discard(state)
 
     if state._prev_winch_handler is not None:
         try:
@@ -138,7 +135,7 @@ def poll_resize(state) -> bool:
             elif current_size != last_size:
                 state._last_size = current_size
                 state.resize_pending = True
-        except Exception:
+        except (OSError, ValueError):
             pass
     return bool(state.resize_pending)
 
@@ -161,5 +158,5 @@ def _on_sigwinch(signum, frame) -> None:
     for state in tuple(_resize_states):
         try:
             _mark_resize_pending(state)
-        except Exception:
+        except (OSError, ValueError):
             pass
