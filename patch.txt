@@ -1,0 +1,1104 @@
+diff --git a/lc_term.py b/lc_term.py
+index aaaaaaa..b111111 100644
+--- a/lc_term.py
++++ b/lc_term.py
+@@ -1,12 +1,26 @@
+ import os
+ 
+-
+ LC_OK = 0
+ LC_ERR = -1
+ 
+ LC_ATTR_NONE = 0
++LC_ATTR_BOLD = 1 << 0
++LC_ATTR_UNDERLINE = 1 << 1
++LC_ATTR_REVERSE = 1 << 2
+ 
+ LC_DIRTY = 1
+ LC_FORCEPAINT = 2
+ 
+@@ -24,6 +38,8 @@ class TermOps:
+     show_cursor_off = "\x1b[?25l"
+     alt_screen_on = "\x1b[?1049h"
+     alt_screen_off = "\x1b[?1049l"
++    enable_wrap = "\x1b[?7h"
++    disable_wrap = "\x1b[?7l"
+     keypad_transmit_on = "\x1b[?1h\x1b="
+     keypad_transmit_off = "\x1b[?1l\x1b>"
+ 
+@@ -31,6 +47,7 @@ class Terminal:
+ class Terminal:
+     def __init__(self) -> None:
+         self.ops = TermOps()
+         self.out_fd = 1
++        self._last_attr = None
+ 
+     def write(self, s: str) -> None:
+         os.write(self.out_fd, s.encode('utf-8', 'replace'))
+@@ -49,9 +66,29 @@ class Terminal:
+     def set_keypad_transmit(self, on: bool) -> int:
+         self.write(self.ops.keypad_transmit_on if on else self.ops.keypad_transmit_off)
+         return 0
++
++    def set_wrap(self, on: bool) -> None:
++        self.write(self.ops.enable_wrap if on else self.ops.disable_wrap)
+ 
+     def set_attr(self, attr: int) -> None:
+-        # Minimal port. Extend if you want bold/reverse/underline.
+-        if attr == LC_ATTR_NONE:
+-            self.write("\x1b[0m")
+-        else:
+-            self.write("\x1b[0m")
++        if attr == self._last_attr:
++            return
++
++        if attr == LC_ATTR_NONE:
++            self.write("\x1b[0m")
++            self._last_attr = attr
++            return
++
++        parts = ["0"]
++        if attr & LC_ATTR_BOLD:
++            parts.append("1")
++        if attr & LC_ATTR_UNDERLINE:
++            parts.append("4")
++        if attr & LC_ATTR_REVERSE:
++            parts.append("7")
++
++        self.write("\x1b[" + ";".join(parts) + "m")
++        self._last_attr = attr
++
++    def reset_state(self) -> None:
++        self._last_attr = None
+diff --git a/lc_window.py b/lc_window.py
+index 6666666..c222222 100644
+--- a/lc_window.py
++++ b/lc_window.py
+@@ -111,3 +111,45 @@ def lc_waddstr(win: Optional[LCWin], s: str) -> int:
+             if win.cury < win.maxy - 1:
+                 win.cury += 1
+     return 0
++
++
++def lc_wmove(win: Optional[LCWin], y: int, x: int) -> int:
++    if win is None:
++        return -1
++    if y < 0 or y >= win.maxy or x < 0 or x >= win.maxx:
++        return -1
++    win.cury = y
++    win.curx = x
++    return 0
++
++
++def lc_wput(win: Optional[LCWin], ch: int, attr: int = LC_ATTR_NONE) -> int:
++    if win is None:
++        return -1
++    if win.curx >= win.maxx or win.cury >= win.maxy:
++        return -1
++
++    try:
++        outch = chr(ch)
++    except (TypeError, ValueError):
++        return -1
++
++    ln = win.lines[win.cury]
++    ln.line[win.curx].ch = outch
++    ln.line[win.curx].attr = attr
++    mark_dirty(ln, win.curx, win.curx + 1, win.maxx)
++
++    win.curx += 1
++    if win.curx >= win.maxx:
++        win.curx = 0
++        if win.cury < win.maxy - 1:
++            win.cury += 1
++    return 0
++
++
++def lc_mvwaddstr(win: Optional[LCWin], y: int, x: int, s: str) -> int:
++    if lc_wmove(win, y, x) != 0:
++        return -1
++    return lc_waddstr(win, s)
+diff --git a/lc_screen.py b/lc_screen.py
+index eeeeeee..d333333 100644
+--- a/lc_screen.py
++++ b/lc_screen.py
+@@ -6,9 +6,17 @@ import sys
+ import termios
+ from contextlib import contextmanager
+ from typing import Optional
+ 
+-from lc_term import LC_ATTR_NONE, Terminal
+-from lc_window import LCCell, LCWin, lc_free, lc_new, mark_dirty
++from lc_term import (
++    LC_ATTR_NONE,
++    Terminal,
++)
++from lc_window import (
++    LCCell,
++    LCWin,
++    lc_free,
++    lc_new,
++    lc_wmove,
++    lc_wput,
++)
+ 
+ 
+ class LCState:
+@@ -21,6 +29,9 @@ class LCState:
+         self.orig_term = None
+         self.cur_term = None
+ 
++        self.in_fd = 0
++        self.out_fd = 1
++
+         self.escdelay_ms = 50
+         self.nodelay_on = False
+         self.meta_on = True
+@@ -43,7 +54,7 @@ lc = LCState()
+ 
+ def _get_winsize() -> tuple[int, int]:
+     try:
+-        buf = fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, b'\x00' * 8)
++        buf = fcntl.ioctl(lc.out_fd, termios.TIOCGWINSZ, b'\x00' * 8)
+         rows, cols, _xp, _yp = struct.unpack('HHHH', buf)
+         if rows > 0 and cols > 0:
+             return rows, cols
+@@ -53,7 +64,9 @@ def _get_winsize() -> tuple[int, int]:
+ 
+ 
+ def lc_init() -> Optional[LCWin]:
+-    in_fd = sys.stdin.fileno()
++    lc.in_fd = sys.stdin.fileno()
++    lc.out_fd = sys.stdout.fileno()
++    lc.term.out_fd = lc.out_fd
+     rows, cols = _get_winsize()
+     lc.lines = rows
+     lc.cols = cols
+@@ -62,13 +75,14 @@ def lc_init() -> Optional[LCWin]:
+     if lc.stdscr is None:
+         return None
+ 
+-    lc.orig_term = termios.tcgetattr(in_fd)
+-    lc.cur_term = termios.tcgetattr(in_fd)
++    lc.orig_term = termios.tcgetattr(lc.in_fd)
++    lc.cur_term = termios.tcgetattr(lc.in_fd)
+ 
+     lc.cur_term[3] &= ~(termios.ICANON | termios.ECHO)
+     lc.cur_term[6][termios.VMIN] = 1
+     lc.cur_term[6][termios.VTIME] = 0
+-    termios.tcsetattr(in_fd, termios.TCSAFLUSH, lc.cur_term)
++    termios.tcsetattr(lc.in_fd, termios.TCSAFLUSH, lc.cur_term)
+ 
++    lc.term.reset_state()
+     lc.term.use_alternate_screen(True)
+     lc_keypad(True)
+     lc.term.clear_screen()
+@@ -82,8 +96,6 @@ def lc_init() -> Optional[LCWin]:
+ 
+ 
+ def lc_end() -> int:
+-    in_fd = sys.stdin.fileno()
+-
+     # Emit terminal restore sequences before restoring termios.
+     try:
+         lc.term.set_attr(LC_ATTR_NONE)
+@@ -94,9 +106,10 @@ def lc_end() -> int:
+     except OSError:
+         pass
+ 
++    lc.term.reset_state()
+     if lc.orig_term is not None:
+         try:
+-            termios.tcsetattr(in_fd, termios.TCSAFLUSH, lc.orig_term)
++            termios.tcsetattr(lc.in_fd, termios.TCSAFLUSH, lc.orig_term)
+         except OSError:
+             pass
+ 
+@@ -106,11 +119,16 @@ def lc_end() -> int:
+ 
+     lc.screen = []
+     lc.hashes = []
++    lc.pushback_byte = None
++    lc.cur_y = 0
++    lc.cur_x = 0
++    lc.cur_attr = LC_ATTR_NONE
+     return 0
+ 
+ 
+ def _apply_term() -> int:
+     try:
+-        termios.tcsetattr(sys.stdin.fileno(), termios.TCSAFLUSH, lc.cur_term)
++        termios.tcsetattr(lc.in_fd, termios.TCSAFLUSH, lc.cur_term)
+         return 0
+     except OSError:
+         return -1
+@@ -148,25 +166,16 @@ def lc_move(y: int, x: int) -> int:
+     if lc.stdscr is None:
+         return -1
+     if y < 0 or y >= lc.stdscr.maxy or x < 0 or x >= lc.stdscr.maxx:
+         return -1
+-    lc.stdscr.cury = y
+-    lc.stdscr.curx = x
+-    return 0
++    return lc_wmove(lc.stdscr, y, x)
+ 
+ 
+ def lc_put(ch: int) -> int:
+     if lc.stdscr is None:
+         return -1
+-
+-    win = lc.stdscr
+-    if win.curx >= win.maxx or win.cury >= win.maxy:
+-        return -1
+-
+-    try:
+-        outch = chr(ch)
+-    except (TypeError, ValueError):
+-        return -1
+-
+-    ln = win.lines[win.cury]
+-    ln.line[win.curx].ch = outch
+-    ln.line[win.curx].attr = LC_ATTR_NONE
+-    mark_dirty(ln, win.curx, win.curx + 1, win.maxx)
+-
+-    win.curx += 1
+-    if win.curx >= win.maxx:
+-        win.curx = 0
+-        if win.cury < win.maxy - 1:
+-            win.cury += 1
+-
+-    return 0
++    return lc_wput(lc.stdscr, ch, LC_ATTR_NONE)
+@@ -182,6 +191,14 @@ def lc_mvaddstr(y: int, x: int, s: str) -> int:
+     if lc_move(y, x) != 0:
+         return -1
+     return lc_addstr(s)
++
++
++def lc_put_attr(ch: int, attr: int) -> int:
++    if lc.stdscr is None:
++        return -1
++    return lc_wput(lc.stdscr, ch, attr)
++
++
+diff --git a/lc_input.py b/lc_input.py
+index 1111111..e444444 100644
+--- a/lc_input.py
++++ b/lc_input.py
+@@ -6,6 +6,27 @@ from typing import Optional
+ from lc_screen import lc
+ 
+ 
++class LCInputSource:
++    def __init__(self) -> None:
++        self.state = lc
++
++    def unread_byte(self, ch: int) -> None:
++        self.state.pushback_byte = ch & 0xFF
++
++    def read_byte(self) -> Optional[int]:
++        if self.state.pushback_byte is not None:
++            ch = self.state.pushback_byte
++            self.state.pushback_byte = None
++            return ch
++
++        while True:
++            try:
++                data = os.read(self.state.in_fd, 1)
++                if len(data) == 1:
++                    return data[0]
++                if len(data) == 0:
++                    return None
++            except InterruptedError:
++                continue
++            except OSError:
++                return None
++
++    def input_pending(self, timeout_ms: int) -> bool:
++        timeout = None if timeout_ms < 0 else timeout_ms / 1000.0
++        while True:
++            try:
++                r, _w, _e = select.select([self.state.in_fd], [], [], timeout)
++                return bool(r)
++            except InterruptedError:
++                continue
++            except OSError:
++                return False
++
++
++default_input = LCInputSource()
++
++
+ def unread_byte(ch: int) -> None:
+-    lc.pushback_byte = ch & 0xFF
++    default_input.unread_byte(ch)
+ 
+ 
+ def read_byte() -> Optional[int]:
+-    if lc.pushback_byte is not None:
+-        ch = lc.pushback_byte
+-        lc.pushback_byte = None
+-        return ch
+-
+-    while True:
+-        try:
+-            data = os.read(sys.stdin.fileno(), 1)
+-            if len(data) == 1:
+-                return data[0]
+-            if len(data) == 0:
+-                return None
+-        except InterruptedError:
+-            continue
+-        except OSError:
+-            return None
++    return default_input.read_byte()
+ 
+ 
+ def input_pending(timeout_ms: int) -> bool:
+-    timeout = None if timeout_ms < 0 else timeout_ms / 1000.0
+-
+-    while True:
+-        try:
+-            r, _w, _e = select.select([sys.stdin.fileno()], [], [], timeout)
+-            return bool(r)
+-        except InterruptedError:
+-            continue
+-        except OSError:
+-            return False
++    return default_input.input_pending(timeout_ms)
+diff --git a/lc_keys.py b/lc_keys.py
+index 8888888..f555555 100644
+--- a/lc_keys.py
++++ b/lc_keys.py
+@@ -1,8 +1,8 @@
+ from dataclasses import dataclass
+ 
+ from lc_term import LC_ERR, LC_OK
+-from lc_input import input_pending, read_byte, unread_byte
++from lc_input import LCInputSource, default_input
+ from lc_screen import lc
+ 
+ 
+ LC_KT_CHAR = 1
+@@ -56,227 +56,258 @@ class LCKey:
+     keysym: int = 0
+ 
+ 
+-def decode_ss3() -> int:
+-    ch = read_byte()
+-    if ch is None:
+-        return -1
+-
+-    table = {
+-        ord('F'): LC_KEY_END,
+-        ord('H'): LC_KEY_HOME,
+-        ord('A'): LC_KEY_UP,
+-        ord('B'): LC_KEY_DOWN,
+-        ord('C'): LC_KEY_RIGHT,
+-        ord('D'): LC_KEY_LEFT,
+-        ord('P'): LC_KEY_F1,
+-        ord('Q'): LC_KEY_F2,
+-        ord('R'): LC_KEY_F3,
+-        ord('S'): LC_KEY_F4,
+-        ord('p'): ord('0'),
+-        ord('q'): ord('1'),
+-        ord('r'): ord('2'),
+-        ord('s'): ord('3'),
+-        ord('t'): ord('4'),
+-        ord('u'): ord('5'),
+-        ord('v'): ord('6'),
+-        ord('w'): ord('7'),
+-        ord('x'): ord('8'),
+-        ord('y'): ord('9'),
+-        ord('n'): ord('.'),
+-        ord('m'): ord('-'),
+-        ord('M'): ord('\n'),
+-    }
+-    return table.get(ch, -1)
+-
+-
+-def decode_utf8(first: int) -> int:
+-    if first < 0x80:
+-        return first
+-
+-    if 0xC2 <= first <= 0xDF:
+-        need = 1
+-        code = first & 0x1F
+-        minimum = 0x80
+-    elif 0xE0 <= first <= 0xEF:
+-        need = 2
+-        code = first & 0x0F
+-        minimum = 0x800
+-    elif 0xF0 <= first <= 0xF4:
+-        need = 3
+-        code = first & 0x07
+-        minimum = 0x10000
+-    else:
+-        return first
+-
+-    cont = []
+-    for _ in range(need):
+-        nxt = read_byte()
+-        if nxt is None:
+-            return first
+-        if (nxt & 0xC0) != 0x80:
+-            unread_byte(nxt)
+-            return first
+-        cont.append(nxt)
+-
+-    for nxt in cont:
+-        code = (code << 6) | (nxt & 0x3F)
+-
+-    if code < minimum or 0xD800 <= code <= 0xDFFF or code > 0x10FFFF:
+-        return first
+-
+-    return code
+-
+-
+-def apply_modifiers(base: int, shift_code: int, ctrl_code: int, mod_value: int) -> int:
+-    if mod_value < 0 or mod_value == 1:
+-        return base
+-
+-    if mod_value in (5, 7):
+-        if ctrl_code:
+-            return ctrl_code
+-    elif mod_value in (6, 8):
+-        if ctrl_code:
+-            return ctrl_code
+-        if shift_code:
+-            return shift_code
+-    elif mod_value in (2, 4):
+-        if shift_code:
+-            return shift_code
+-
+-    return base
+-
+-
+-def mods_from_xterm(mod_value: int) -> int:
+-    if mod_value < 0:
+-        return 0
+-
+-    mods = 0
+-    bits = mod_value - 1
+-    if bits & 1:
+-        mods |= LC_MOD_SHIFT
+-    if bits & 2:
+-        mods |= LC_MOD_ALT
+-    if bits & 4:
+-        mods |= LC_MOD_CTRL
+-    return mods
+-
+-
+-def decode_csi() -> int:
+-    buf = bytearray()
+-
+-    while len(buf) < 31:
+-        ch = read_byte()
++class LCKeyParser:
++    def __init__(self, source: LCInputSource) -> None:
++        self.source = source
++
++    def _decode_ss3(self) -> int:
++        ch = self.source.read_byte()
+         if ch is None:
+             return -1
+-        buf.append(ch)
+-        if (ord('A') <= ch <= ord('Z')) or ch == ord('~'):
+-            break
+-
+-    if not buf:
+-        return -1
+-
+-    final = buf[-1]
+-    body = bytes(buf[:-1]).decode('ascii', 'ignore')
+-
+-    params: list[int] = []
+-    current = 0
+-    have_number = False
+-
+-    for c in body:
+-        if '0' <= c <= '9':
+-            current = current * 10 + (ord(c) - ord('0'))
+-            have_number = True
+-        elif c == ';':
+-            params.append(current if have_number else 0)
+-            current = 0
+-            have_number = False
+-
+-    if have_number:
+-        params.append(current)
+-
+-    mod_value = -1
+-    for candidate in reversed(params):
+-        if candidate > 1:
+-            mod_value = candidate
+-            break
+-
+-    mods = mods_from_xterm(mod_value)
+-
+-    if final == ord('A'):
+-        keysym = apply_modifiers(LC_KEY_UP, LC_KEY_SHIFT_UP, LC_KEY_CTRL_UP, mod_value)
+-    elif final == ord('B'):
+-        keysym = apply_modifiers(LC_KEY_DOWN, LC_KEY_SHIFT_DOWN, LC_KEY_CTRL_DOWN, mod_value)
+-    elif final == ord('C'):
+-        keysym = apply_modifiers(LC_KEY_RIGHT, LC_KEY_SHIFT_RIGHT, LC_KEY_CTRL_RIGHT, mod_value)
+-    elif final == ord('D'):
+-        keysym = apply_modifiers(LC_KEY_LEFT, LC_KEY_SHIFT_LEFT, LC_KEY_CTRL_LEFT, mod_value)
+-    elif final == ord('F'):
+-        keysym = apply_modifiers(LC_KEY_END, LC_KEY_SHIFT_END, 0, mod_value)
+-    elif final == ord('H'):
+-        keysym = apply_modifiers(LC_KEY_HOME, LC_KEY_SHIFT_HOME, 0, mod_value)
+-    elif final == ord('Z'):
+-        keysym = LC_KEY_BTAB
+-    elif final == ord('~'):
+-        if not params:
++
++        table = {
++            ord('F'): LC_KEY_END,
++            ord('H'): LC_KEY_HOME,
++            ord('A'): LC_KEY_UP,
++            ord('B'): LC_KEY_DOWN,
++            ord('C'): LC_KEY_RIGHT,
++            ord('D'): LC_KEY_LEFT,
++            ord('P'): LC_KEY_F1,
++            ord('Q'): LC_KEY_F2,
++            ord('R'): LC_KEY_F3,
++            ord('S'): LC_KEY_F4,
++            ord('p'): ord('0'),
++            ord('q'): ord('1'),
++            ord('r'): ord('2'),
++            ord('s'): ord('3'),
++            ord('t'): ord('4'),
++            ord('u'): ord('5'),
++            ord('v'): ord('6'),
++            ord('w'): ord('7'),
++            ord('x'): ord('8'),
++            ord('y'): ord('9'),
++            ord('n'): ord('.'),
++            ord('m'): ord('-'),
++            ord('M'): ord('\n'),
++        }
++        return table.get(ch, -1)
++
++    def _decode_utf8(self, first: int) -> int:
++        if first < 0x80:
++            return first
++
++        if 0xC2 <= first <= 0xDF:
++            need = 1
++            code = first & 0x1F
++            minimum = 0x80
++        elif 0xE0 <= first <= 0xEF:
++            need = 2
++            code = first & 0x0F
++            minimum = 0x800
++        elif 0xF0 <= first <= 0xF4:
++            need = 3
++            code = first & 0x07
++            minimum = 0x10000
++        else:
++            return first
++
++        cont = []
++        for _ in range(need):
++            nxt = self.source.read_byte()
++            if nxt is None:
++                return first
++            if (nxt & 0xC0) != 0x80:
++                self.source.unread_byte(nxt)
++                return first
++            cont.append(nxt)
++
++        for nxt in cont:
++            code = (code << 6) | (nxt & 0x3F)
++
++        if code < minimum or 0xD800 <= code <= 0xDFFF or code > 0x10FFFF:
++            return first
++
++        return code
++
++    def _apply_modifiers(self, base: int, shift_code: int, ctrl_code: int, mod_value: int) -> int:
++        if mod_value < 0 or mod_value == 1:
++            return base
++
++        if mod_value in (5, 7):
++            if ctrl_code:
++                return ctrl_code
++        elif mod_value in (6, 8):
++            if ctrl_code:
++                return ctrl_code
++            if shift_code:
++                return shift_code
++        elif mod_value in (2, 4):
++            if shift_code:
++                return shift_code
++
++        return base
++
++    def _mods_from_xterm(self, mod_value: int) -> int:
++        if mod_value < 0:
++            return 0
++
++        mods = 0
++        bits = mod_value - 1
++        if bits & 1:
++            mods |= LC_MOD_SHIFT
++        if bits & 2:
++            mods |= LC_MOD_ALT
++        if bits & 4:
++            mods |= LC_MOD_CTRL
++        return mods
++
++    def _decode_csi(self) -> int:
++        buf = bytearray()
++
++        while len(buf) < 31:
++            ch = self.source.read_byte()
++            if ch is None:
++                return -1
++            buf.append(ch)
++            if (ord('A') <= ch <= ord('Z')) or ch == ord('~'):
++                break
++
++        if not buf:
+             return -1
+ 
+-        p0 = params[0]
+-        if p0 in (1, 7):
+-            keysym = apply_modifiers(LC_KEY_HOME, LC_KEY_SHIFT_HOME, 0, mod_value)
+-        elif p0 == 2:
+-            keysym = LC_KEY_INSERT
+-        elif p0 == 3:
+-            keysym = LC_KEY_DELETE
+-        elif p0 in (4, 8):
+-            keysym = apply_modifiers(LC_KEY_END, LC_KEY_SHIFT_END, 0, mod_value)
+-        elif p0 == 5:
+-            keysym = apply_modifiers(LC_KEY_PGUP, LC_KEY_SHIFT_PGUP, 0, mod_value)
+-        elif p0 == 6:
+-            keysym = apply_modifiers(LC_KEY_PGDOWN, LC_KEY_SHIFT_PGDOWN, 0, mod_value)
+-        elif p0 == 15:
+-            keysym = LC_KEY_F5
+-        elif p0 == 17:
+-            keysym = LC_KEY_F6
+-        elif p0 == 18:
+-            keysym = LC_KEY_F7
+-        elif p0 == 19:
+-            keysym = LC_KEY_F8
+-        elif p0 == 20:
+-            keysym = LC_KEY_F9
+-        elif p0 == 21:
+-            keysym = LC_KEY_F10
+-        elif p0 == 23:
+-            keysym = LC_KEY_F11
+-        elif p0 == 24:
+-            keysym = LC_KEY_F12
+-        elif p0 == 25:
+-            keysym = LC_KEY_F13
+-        elif p0 == 26:
+-            keysym = LC_KEY_F14
+-        elif p0 == 28:
+-            keysym = LC_KEY_F15
+-        elif p0 == 29:
+-            keysym = LC_KEY_F16
+-        elif p0 == 31:
+-            keysym = LC_KEY_F17
+-        elif p0 == 32:
+-            keysym = LC_KEY_F18
+-        elif p0 == 33:
+-            keysym = LC_KEY_F19
+-        elif p0 == 34:
+-            keysym = LC_KEY_F20
++        final = buf[-1]
++        body = bytes(buf[:-1]).decode('ascii', 'ignore')
++
++        params: list[int] = []
++        current = 0
++        have_number = False
++
++        for c in body:
++            if '0' <= c <= '9':
++                current = current * 10 + (ord(c) - ord('0'))
++                have_number = True
++            elif c == ';':
++                params.append(current if have_number else 0)
++                current = 0
++                have_number = False
++
++        if have_number:
++            params.append(current)
++
++        mod_value = -1
++        for candidate in reversed(params):
++            if candidate > 1:
++                mod_value = candidate
++                break
++
++        mods = self._mods_from_xterm(mod_value)
++
++        if final == ord('A'):
++            keysym = self._apply_modifiers(LC_KEY_UP, LC_KEY_SHIFT_UP, LC_KEY_CTRL_UP, mod_value)
++        elif final == ord('B'):
++            keysym = self._apply_modifiers(LC_KEY_DOWN, LC_KEY_SHIFT_DOWN, LC_KEY_CTRL_DOWN, mod_value)
++        elif final == ord('C'):
++            keysym = self._apply_modifiers(LC_KEY_RIGHT, LC_KEY_SHIFT_RIGHT, LC_KEY_CTRL_RIGHT, mod_value)
++        elif final == ord('D'):
++            keysym = self._apply_modifiers(LC_KEY_LEFT, LC_KEY_SHIFT_LEFT, LC_KEY_CTRL_LEFT, mod_value)
++        elif final == ord('F'):
++            keysym = self._apply_modifiers(LC_KEY_END, LC_KEY_SHIFT_END, 0, mod_value)
++        elif final == ord('H'):
++            keysym = self._apply_modifiers(LC_KEY_HOME, LC_KEY_SHIFT_HOME, 0, mod_value)
++        elif final == ord('Z'):
++            keysym = LC_KEY_BTAB
++        elif final == ord('~'):
++            if not params:
++                return -1
++
++            p0 = params[0]
++            if p0 in (1, 7):
++                keysym = self._apply_modifiers(LC_KEY_HOME, LC_KEY_SHIFT_HOME, 0, mod_value)
++            elif p0 == 2:
++                keysym = LC_KEY_INSERT
++            elif p0 == 3:
++                keysym = LC_KEY_DELETE
++            elif p0 in (4, 8):
++                keysym = self._apply_modifiers(LC_KEY_END, LC_KEY_SHIFT_END, 0, mod_value)
++            elif p0 == 5:
++                keysym = self._apply_modifiers(LC_KEY_PGUP, LC_KEY_SHIFT_PGUP, 0, mod_value)
++            elif p0 == 6:
++                keysym = self._apply_modifiers(LC_KEY_PGDOWN, LC_KEY_SHIFT_PGDOWN, 0, mod_value)
++            elif p0 == 15:
++                keysym = LC_KEY_F5
++            elif p0 == 17:
++                keysym = LC_KEY_F6
++            elif p0 == 18:
++                keysym = LC_KEY_F7
++            elif p0 == 19:
++                keysym = LC_KEY_F8
++            elif p0 == 20:
++                keysym = LC_KEY_F9
++            elif p0 == 21:
++                keysym = LC_KEY_F10
++            elif p0 == 23:
++                keysym = LC_KEY_F11
++            elif p0 == 24:
++                keysym = LC_KEY_F12
++            elif p0 == 25:
++                keysym = LC_KEY_F13
++            elif p0 == 26:
++                keysym = LC_KEY_F14
++            elif p0 == 28:
++                keysym = LC_KEY_F15
++            elif p0 == 29:
++                keysym = LC_KEY_F16
++            elif p0 == 31:
++                keysym = LC_KEY_F17
++            elif p0 == 32:
++                keysym = LC_KEY_F18
++            elif p0 == 33:
++                keysym = LC_KEY_F19
++            elif p0 == 34:
++                keysym = LC_KEY_F20
++            else:
++                return -1
+         else:
+             return -1
+-    else:
+-        return -1
+ 
+-    return (mods << 24) | (keysym & 0x00FFFFFF)
++        return (mods << 24) | (keysym & 0x00FFFFFF)
+ 
++    @staticmethod
++    def _extract_mods_and_keysym(packed: int) -> tuple[int, int]:
++        if packed < 0:
++            return -1, 0
++        mods = (packed >> 24) & 0xFF
++        keysym = packed & 0x00FFFFFF
++        return keysym, mods
+ 
+-def extract_mods_and_keysym(packed: int) -> tuple[int, int]:
+-    if packed < 0:
+-        return -1, 0
+-    mods = (packed >> 24) & 0xFF
+-    keysym = packed & 0x00FFFFFF
+-    return keysym, mods
++    def readkey(self, out: LCKey) -> int:
++        if out is None:
++            return LC_ERR
+ 
++        if lc.nodelay_on and not self.source.input_pending(0):
++            return LC_ERR
+ 
+-def lc_readkey(out: LCKey) -> int:
+-    if out is None:
+-        return LC_ERR
++        uc = self.source.read_byte()
++        if uc is None:
++            return LC_ERR
+ 
+-    if lc.nodelay_on and not input_pending(0):
+-        return LC_ERR
++        c = uc
+ 
+-    uc = read_byte()
+-    if uc is None:
+-        return LC_ERR
++        if c != 0x1B:
++            if c >= 0x80:
++                c = self._decode_utf8(c)
++            out.type = LC_KT_CHAR
++            out.mods = 0
++            out.rune = c
++            out.keysym = 0
++            return LC_OK
+ 
+-    c = uc
++        to_ms = lc.escdelay_ms
++        if lc.nodelay_on and to_ms < 0:
++            to_ms = 0
+ 
+-    if c != 0x1B:
+-        if c >= 0x80:
+-            c = decode_utf8(c)
+-        out.type = LC_KT_CHAR
+-        out.mods = 0
+-        out.rune = c
+-        out.keysym = 0
+-        return LC_OK
++        if to_ms < 0:
++            uc = self.source.read_byte()
++            if uc is None:
++                out.type = LC_KT_CHAR
++                out.mods = 0
++                out.rune = 0x1B
++                out.keysym = 0
++                return LC_OK
++        else:
++            if not self.source.input_pending(to_ms):
++                out.type = LC_KT_CHAR
++                out.mods = 0
++                out.rune = 0x1B
++                out.keysym = 0
++                return LC_OK
++            uc = self.source.read_byte()
++            if uc is None:
++                return LC_ERR
+ 
+-    to_ms = lc.escdelay_ms
+-    if lc.nodelay_on and to_ms < 0:
+-        to_ms = 0
++        if uc == ord('['):
++            packed = self._decode_csi()
++            keysym, mods = self._extract_mods_and_keysym(packed)
++            if keysym < 0:
++                return LC_ERR
++            out.type = LC_KT_KEYSYM
++            out.mods = mods
++            out.keysym = keysym
++            out.rune = 0
++            return LC_OK
+ 
+-    if to_ms < 0:
+-        uc = read_byte()
+-        if uc is None:
+-            out.type = LC_KT_CHAR
++        if uc == ord('O'):
++            keysym = self._decode_ss3()
++            if keysym < 0:
++                return LC_ERR
++            out.type = LC_KT_KEYSYM
+             out.mods = 0
+-            out.rune = 0x1B
+-            out.keysym = 0
++            out.keysym = keysym
++            out.rune = 0
+             return LC_OK
+-    else:
+-        if not input_pending(to_ms):
++
++        if lc.meta_on:
++            if uc >= 0x80:
++                c = self._decode_utf8(uc)
++            else:
++                c = uc
+             out.type = LC_KT_CHAR
+-            out.mods = 0
+-            out.rune = 0x1B
++            out.mods = LC_MOD_ALT
++            out.rune = c
+             out.keysym = 0
+             return LC_OK
+-        uc = read_byte()
+-        if uc is None:
+-            return LC_ERR
+-
+-    if uc == ord('['):
+-        packed = decode_csi()
+-        keysym, mods = extract_mods_and_keysym(packed)
+-        if keysym < 0:
+-            return LC_ERR
+-        out.type = LC_KT_KEYSYM
+-        out.mods = mods
+-        out.keysym = keysym
+-        out.rune = 0
+-        return LC_OK
+-
+-    if uc == ord('O'):
+-        keysym = decode_ss3()
+-        if keysym < 0:
+-            return LC_ERR
+-        out.type = LC_KT_KEYSYM
+-        out.mods = 0
+-        out.keysym = keysym
+-        out.rune = 0
+-        return LC_OK
+-
+-    if lc.meta_on:
+-        if uc >= 0x80:
+-            c = decode_utf8(uc)
+-        else:
+-            c = uc
++
++        self.source.unread_byte(uc)
+         out.type = LC_KT_CHAR
+-        out.mods = LC_MOD_ALT
+-        out.rune = c
++        out.mods = 0
++        out.rune = 0x1B
+         out.keysym = 0
+         return LC_OK
+ 
+-    unread_byte(uc)
+-    out.type = LC_KT_CHAR
+-    out.mods = 0
+-    out.rune = 0x1B
+-    out.keysym = 0
+-    return LC_OK
++
++default_parser = LCKeyParser(default_input)
++
++
++def lc_readkey(out: LCKey) -> int:
++    return default_parser.readkey(out)
+ 
+ 
+ def lc_getch() -> int:
+diff --git a/lc_refresh.py b/lc_refresh.py
+index ddddddd..a666666 100644
+--- a/lc_refresh.py
++++ b/lc_refresh.py
+@@ -1,7 +1,13 @@
+ import os
+-import sys
+ from typing import Optional
+ 
+-from lc_term import LC_ATTR_NONE, LC_DIRTY, LC_FORCEPAINT
++from lc_term import (
++    LC_ATTR_NONE,
++    LC_DIRTY,
++    LC_FORCEPAINT,
++    LC_ATTR_BOLD,
++    LC_ATTR_UNDERLINE,
++    LC_ATTR_REVERSE,
++)
+ from lc_window import LCCell, LCWin
+ from lc_screen import lc
+ 
+@@ -21,7 +27,7 @@ def lc_refresh() -> int:
+ def lc_wrefresh(win: Optional[LCWin]) -> int:
+     if win is None:
+         return -1
+-    out_fd = sys.stdout.fileno()
++    out_fd = lc.out_fd
+ 
+     if len(lc.screen) != lc.lines or (lc.lines > 0 and len(lc.screen[0]) != lc.cols):
+         lc.screen = [[LCCell(' ', LC_ATTR_NONE) for _x in range(lc.cols)] for _y in range(lc.lines)]
+@@ -68,5 +74,4 @@ def lc_wrefresh(win: Optional[LCWin]) -> int:
+ 
+     lc.term.set_attr(LC_ATTR_NONE)
+     lc.cur_attr = LC_ATTR_NONE
+-    sys.stdout.flush()
+     return 0
+diff --git a/tests/test_lc_keys.py b/tests/test_lc_keys.py
+new file mode 100644
+index 0000000..b777777
+--- /dev/null
++++ b/tests/test_lc_keys.py
+@@ -0,0 +1,108 @@
++from lc_keys import (
++    LCKey,
++    LCKeyParser,
++    LC_KEY_UP,
++    LC_KEY_F5,
++    LC_KEY_DELETE,
++    LC_KT_CHAR,
++    LC_KT_KEYSYM,
++)
++
++
++class FakeInput:
++    def __init__(self, data: bytes) -> None:
++        self.buf = bytearray(data)
++        self.pushback = None
++
++    def unread_byte(self, ch: int) -> None:
++        self.pushback = ch & 0xFF
++
++    def read_byte(self):
++        if self.pushback is not None:
++            ch = self.pushback
++            self.pushback = None
++            return ch
++        if not self.buf:
++            return None
++        ch = self.buf[0]
++        del self.buf[0]
++        return ch
++
++    def input_pending(self, timeout_ms: int) -> bool:
++        return self.pushback is not None or bool(self.buf)
++
++
++def test_plain_ascii():
++    src = FakeInput(b"a")
++    parser = LCKeyParser(src)
++    key = LCKey()
++    assert parser.readkey(key) == 0
++    assert key.type == LC_KT_CHAR
++    assert key.rune == ord("a")
++
++
++def test_utf8_char():
++    src = FakeInput("å".encode("utf-8"))
++    parser = LCKeyParser(src)
++    key = LCKey()
++    assert parser.readkey(key) == 0
++    assert key.type == LC_KT_CHAR
++    assert key.rune == ord("å")
++
++
++def test_csi_up():
++    src = FakeInput(b"\x1b[A")
++    parser = LCKeyParser(src)
++    key = LCKey()
++    assert parser.readkey(key) == 0
++    assert key.type == LC_KT_KEYSYM
++    assert key.keysym == LC_KEY_UP
++
++
++def test_csi_delete():
++    src = FakeInput(b"\x1b[3~")
++    parser = LCKeyParser(src)
++    key = LCKey()
++    assert parser.readkey(key) == 0
++    assert key.type == LC_KT_KEYSYM
++    assert key.keysym == LC_KEY_DELETE
++
++
++def test_csi_f5():
++    src = FakeInput(b"\x1b[15~")
++    parser = LCKeyParser(src)
++    key = LCKey()
++    assert parser.readkey(key) == 0
++    assert key.type == LC_KT_KEYSYM
++    assert key.keysym == LC_KEY_F5
