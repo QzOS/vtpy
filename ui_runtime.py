@@ -25,6 +25,7 @@ from ui_view import (
     ui_view_collect_focusable,
     ui_view_draw,
     ui_view_handle_event,
+    ui_view_measure,
     ui_view_mark_dirty,
     ui_view_layout_default,
     ui_view_rebind_tree,
@@ -55,22 +56,31 @@ def ui_runtime_create(root: Optional[UIView]) -> Optional[UIRuntime]:
     return rt
 
 
-def ui_runtime_bind_root(rt: Optional[UIRuntime]) -> int:
+def ui_runtime_layout(rt: Optional[UIRuntime]) -> int:
     rows = 0
     cols = 0
+
+    if rt is None or rt.root is None:
+        return -1
+
+    rows, cols = lc_get_size()
+    rt.last_width = cols
+    rt.last_height = rows
+    if ui_layout_assign_root(rt.root, rows, cols) != 0:
+        return -1
+    if ui_view_measure(rt.root) != 0:
+        return -1
+    return ui_view_layout_default(rt.root)
+
+
+def ui_runtime_bind_root(rt: Optional[UIRuntime]) -> int:
     root = None
 
     if rt is None or rt.root is None:
         return -1
 
     root = rt.root
-    rows, cols = lc_get_size()
-    rt.last_width = cols
-    rt.last_height = rows
-
-    if ui_layout_assign_root(root, rows, cols) != 0:
-        return -1
-    if ui_view_layout_default(root) != 0:
+    if ui_runtime_layout(rt) != 0:
         return -1
 
     if lc.stdscr is None:
@@ -141,8 +151,6 @@ def ui_runtime_focus_cycle(rt: Optional[UIRuntime], step: int) -> int:
 def ui_runtime_dispatch(rt: Optional[UIRuntime], ev: UIEvent) -> int:
     cmd = UI_CMD_NONE
     target = None
-    rows = 0
-    cols = 0
 
     if rt is None or rt.root is None or ev is None:
         return -1
@@ -151,9 +159,6 @@ def ui_runtime_dispatch(rt: Optional[UIRuntime], ev: UIEvent) -> int:
         return 0
 
     if ev.type == UI_EVENT_RESIZE:
-        rows, cols = lc_get_size()
-        ui_layout_assign_root(rt.root, rows, cols)
-        ui_view_layout_default(rt.root)
         if ui_runtime_bind_root(rt) != 0:
             return -1
         ui_view_mark_dirty(rt.root)

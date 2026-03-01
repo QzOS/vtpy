@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+
 @dataclass
 class UIRect:
     y: int = 0
@@ -16,6 +17,18 @@ def ui_rect(y: int, x: int, height: int, width: int) -> UIRect:
 
 def ui_rect_empty() -> UIRect:
     return UIRect()
+
+
+def ui_rect_is_empty(rect: UIRect) -> bool:
+    if rect is None:
+        return True
+    return rect.height <= 0 or rect.width <= 0
+
+
+def ui_rect_copy(rect: UIRect) -> UIRect:
+    if rect is None:
+        return ui_rect_empty()
+    return UIRect(y=rect.y, x=rect.x, height=rect.height, width=rect.width)
 
 
 def ui_rect_normalize(y: int, x: int, height: int, width: int) -> UIRect:
@@ -128,5 +141,42 @@ def ui_layout_stack_vertical(parent_rect: UIRect, views: list, gap: int = 0) -> 
 
         cur_y += h + gap
         remaining -= h
+
+    return 0
+
+
+def ui_layout_stack_horizontal(parent_rect: UIRect, views: list, gap: int = 0) -> int:
+    cur_x = 0
+    remaining = 0
+    count = 0
+
+    if parent_rect is None:
+        return -1
+    if views is None:
+        return -1
+
+    count = len(views)
+    if count == 0:
+        return 0
+
+    remaining = parent_rect.width - (gap * (count - 1))
+    if remaining < 0:
+        remaining = 0
+
+    cur_x = parent_rect.x
+
+    for i, view in enumerate(views):
+        if view is None:
+            continue
+        if i == count - 1:
+            w = (parent_rect.x + parent_rect.width) - cur_x
+        else:
+            w = remaining // (count - i)
+        if w < 0:
+            w = 0
+        view.frame_rect = ui_rect(parent_rect.y, cur_x, parent_rect.height, w)
+        view.content_rect = ui_rect(parent_rect.y, cur_x, parent_rect.height, w)
+        cur_x += w + gap
+        remaining -= w
 
     return 0
