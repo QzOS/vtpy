@@ -651,7 +651,6 @@ def lc_wdraw_vline(
         ln = win.lines[cy]
         ln.line[x].ch = outch
         ln.line[x].attr = attr
-    for cy in range(start, end):
         _mark_window_dirty(win, cy, x, x + 1)
     return 0
 
