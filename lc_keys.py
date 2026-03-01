@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 
 from lc_term import LC_ERR, LC_OK
-from lc_screen import lc
 from lc_input import input_pending, read_byte, unread_byte
+from lc_screen import lc
 
 
 LC_KT_CHAR = 1

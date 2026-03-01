@@ -1,7 +1,9 @@
 import fcntl
+import os
 import struct
 import sys
 import termios
+from contextlib import contextmanager
 from typing import Optional
 
 from lc_term import LC_ATTR_NONE, Terminal
@@ -45,6 +47,7 @@ def _get_winsize() -> tuple[int, int]:
 
 
 def lc_init() -> Optional[LCWin]:
+    in_fd = sys.stdin.fileno()
     rows, cols = _get_winsize()
     lc.lines = rows
     lc.cols = cols
@@ -53,14 +56,13 @@ def lc_init() -> Optional[LCWin]:
     if lc.stdscr is None:
         return None
 
-    fd = sys.stdin.fileno()
-    lc.orig_term = termios.tcgetattr(fd)
-    lc.cur_term = termios.tcgetattr(fd)
+    lc.orig_term = termios.tcgetattr(in_fd)
+    lc.cur_term = termios.tcgetattr(in_fd)
 
     lc.cur_term[3] &= ~(termios.ICANON | termios.ECHO)
     lc.cur_term[6][termios.VMIN] = 1
     lc.cur_term[6][termios.VTIME] = 0
-    termios.tcsetattr(fd, termios.TCSAFLUSH, lc.cur_term)
+    termios.tcsetattr(in_fd, termios.TCSAFLUSH, lc.cur_term)
 
     lc.term.use_alternate_screen(True)
     lc_keypad(True)
@@ -77,19 +79,30 @@ def lc_init() -> Optional[LCWin]:
 
 
 def lc_end() -> int:
-    fd = sys.stdin.fileno()
+    in_fd = sys.stdin.fileno()
+
+    # Emit terminal restore sequences before restoring termios.
+    try:
+        lc.term.set_attr(LC_ATTR_NONE)
+        lc_keypad(False)
+        lc.term.show_cursor(True)
+        lc.term.use_alternate_screen(False)
+        sys.stdout.flush()
+    except OSError:
+        pass
 
     if lc.orig_term is not None:
-        termios.tcsetattr(fd, termios.TCSAFLUSH, lc.orig_term)
-
-    lc_keypad(False)
-    lc.term.show_cursor(True)
-    lc.term.use_alternate_screen(False)
+        try:
+            termios.tcsetattr(in_fd, termios.TCSAFLUSH, lc.orig_term)
+        except OSError:
+            pass
 
     if lc.stdscr is not None:
         lc_free(lc.stdscr)
         lc.stdscr = None
 
+    lc.screen = []
+    lc.hashes = []
     return 0
 
 
@@ -151,6 +164,17 @@ def lc_keypad(on: bool) -> int:
     return lc.term.set_keypad_transmit(bool(on))
 
 
+@contextmanager
+def lc_session():
+    win = lc_init()
+    if win is None:
+        raise RuntimeError("lc_init failed")
+    try:
+        yield win
+    finally:
+        lc_end()
+
+
 def lc_move(y: int, x: int) -> int:
     if lc.stdscr is None:
         return -1
@@ -169,8 +193,13 @@ def lc_put(ch: int) -> int:
     if win.curx >= win.maxx or win.cury >= win.maxy:
         return -1
 
+    try:
+        outch = chr(ch)
+    except (TypeError, ValueError):
+        return -1
+
     ln = win.lines[win.cury]
-    ln.line[win.curx].ch = chr(ch)
+    ln.line[win.curx].ch = outch
     ln.line[win.curx].attr = LC_ATTR_NONE
     mark_dirty(ln, win.curx, win.curx + 1, win.maxx)
 
@@ -181,6 +210,24 @@ def lc_put(ch: int) -> int:
             win.cury += 1
 
     return 0
+
+
+def lc_addstr(s: str) -> int:
+    if lc.stdscr is None:
+        return -1
+    if s is None:
+        return -1
+
+    for ch in s:
+        if lc_put(ord(ch)) != 0:
+            return -1
+    return 0
+
+
+def lc_mvaddstr(y: int, x: int, s: str) -> int:
+    if lc_move(y, x) != 0:
+        return -1
+    return lc_addstr(s)
 
 
 def lc_set_escdelay(ms: int) -> int:

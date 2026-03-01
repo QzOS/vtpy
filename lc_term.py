@@ -1,5 +1,4 @@
 import os
-import sys
 
 
 LC_OK = 0
@@ -27,9 +26,10 @@ class TermOps:
 class Terminal:
     def __init__(self) -> None:
         self.ops = TermOps()
+        self.out_fd = 1
 
     def write(self, s: str) -> None:
-        os.write(sys.stdout.fileno(), s.encode('utf-8', 'replace'))
+        os.write(self.out_fd, s.encode('utf-8', 'replace'))
 
     def move(self, y: int, x: int) -> None:
         # ANSI/VT cursor positions are 1-based.

@@ -133,3 +133,22 @@ def lc_wclrtoeol(win: Optional[LCWin]) -> int:
         return -1
     fill_rect(win, win.cury, win.curx, win.cury + 1, win.maxx, ' ')
     return 0
+
+
+def lc_waddstr(win: Optional[LCWin], s: str) -> int:
+    if win is None or s is None:
+        return -1
+
+    for ch in s:
+        if win.curx >= win.maxx or win.cury >= win.maxy:
+            return -1
+        ln = win.lines[win.cury]
+        ln.line[win.curx].ch = ch
+        ln.line[win.curx].attr = LC_ATTR_NONE
+        mark_dirty(ln, win.curx, win.curx + 1, win.maxx)
+        win.curx += 1
+        if win.curx >= win.maxx:
+            win.curx = 0
+            if win.cury < win.maxy - 1:
+                win.cury += 1
+    return 0

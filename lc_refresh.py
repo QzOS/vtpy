@@ -2,18 +2,20 @@ import os
 import sys
 from typing import Optional
 
-from lc_term import LC_ATTR_NONE
+from lc_term import LC_ATTR_NONE, LC_DIRTY, LC_FORCEPAINT
 from lc_window import LCCell, LCWin
 from lc_screen import lc
 
 
 def line_hash(cells: list[LCCell]) -> int:
+    # FNV-1a over rendered cell content and attr.
     h = 2166136261
     for cell in cells:
-        b = cell.ch.encode('utf-8', 'replace')[:1]
-        chv = b[0] if b else ord(' ')
-        h ^= chv
-        h = (h * 16777619) & 0xFFFFFFFF
+        data = cell.ch.encode('utf-8', 'replace')
+        for b in data:
+            h ^= b
+            h = (h * 16777619) & 0xFFFFFFFF
+
         h ^= cell.attr & 0xFF
         h = (h * 16777619) & 0xFFFFFFFF
     return h
@@ -26,6 +28,7 @@ def lc_refresh() -> int:
 def lc_wrefresh(win: Optional[LCWin]) -> int:
     if win is None:
         return -1
+    out_fd = sys.stdout.fileno()
 
     if len(lc.screen) != lc.lines or (lc.lines > 0 and len(lc.screen[0]) != lc.cols):
         lc.screen = [[LCCell(' ', LC_ATTR_NONE) for _x in range(lc.cols)] for _y in range(lc.lines)]
@@ -41,12 +44,21 @@ def lc_wrefresh(win: Optional[LCWin]) -> int:
             continue
 
         ln = win.lines[y]
-        h = line_hash(ln.line)
-        if h == lc.hashes[abs_y]:
+        if not (ln.flags & LC_DIRTY):
             continue
-        lc.hashes[abs_y] = h
 
-        for x in range(win.maxx):
+        h = line_hash(ln.line)
+        if h == lc.hashes[abs_y] and not (ln.flags & LC_FORCEPAINT):
+            ln.firstch = 0
+            ln.lastch = 0
+            ln.flags = 0
+            continue
+
+        lc.hashes[abs_y] = h
+        start_x = max(0, ln.firstch)
+        end_x = min(win.maxx, ln.lastch + 1)
+
+        for x in range(start_x, end_x):
             abs_x = win.begx + x
             if abs_x >= lc.cols:
                 continue
@@ -65,9 +77,13 @@ def lc_wrefresh(win: Optional[LCWin]) -> int:
                 lc.term.set_attr(cell.attr)
                 lc.cur_attr = cell.attr
 
-            os.write(sys.stdout.fileno(), cell.ch.encode('utf-8', 'replace')[:1])
+            os.write(out_fd, cell.ch.encode('utf-8', 'replace'))
             lc.screen[abs_y][abs_x] = LCCell(cell.ch, cell.attr)
             lc.cur_x += 1
+
+        ln.firstch = 0
+        ln.lastch = 0
+        ln.flags = 0
 
     final_y = win.begy + win.cury
     final_x = win.begx + win.curx
@@ -78,4 +94,5 @@ def lc_wrefresh(win: Optional[LCWin]) -> int:
 
     lc.term.set_attr(LC_ATTR_NONE)
     lc.cur_attr = LC_ATTR_NONE
+    sys.stdout.flush()
     return 0
