@@ -405,6 +405,13 @@ def input_pending(state, timeout_ms: int) -> bool:
     if _peek_input_byte(state):
         return True
 
+    with _resize_lock:
+        if state.resize_pending:
+            # Mirror POSIX behavior: once a resize is pending, do not block
+            # here waiting for keyboard input. Let the caller observe it via
+            # poll_resize().
+            return False
+
     rc = _wait_console_input(state, 0)
     if rc == _WAIT_TIMEOUT:
         if timeout_ms == 0:
@@ -418,6 +425,11 @@ def input_pending(state, timeout_ms: int) -> bool:
 
     if _read_console_events(state, block=False) < 0:
         return False
+
+    with _resize_lock:
+        if state.resize_pending:
+            return False
+
     return _peek_input_byte(state)
 
 

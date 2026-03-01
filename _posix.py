@@ -27,8 +27,9 @@ def _call_prev_sigwinch_handler(signum, frame) -> None:
 
     try:
         handler(signum, frame)
-    except TypeError:
-        # Be defensive if a foreign handler has an unexpected signature.
+    except Exception:
+        # Be defensive if a foreign handler is buggy or has an
+        # unexpected callable signature.
         pass
 
 
@@ -105,6 +106,27 @@ def _copy_term_attrs(attrs):
     copied = list(attrs)
     copied[6] = list(attrs[6])
     return copied
+
+
+def _apply_term_attrs(state, new_term) -> int:
+    """Apply a prepared termios attribute list atomically to state."""
+    if new_term is None:
+        return -1
+
+    in_fd = getattr(state, "in_fd", None)
+    if in_fd is None:
+        return -1
+
+    committed = _copy_term_attrs(new_term)
+    if committed is None:
+        return -1
+
+    try:
+        termios.tcsetattr(in_fd, termios.TCSANOW, committed)
+        state.cur_term = committed
+        return 0
+    except (termios.error, OSError, ValueError):
+        return -1
 
 
 def _sync_resize_state(state) -> bool:
@@ -306,63 +328,71 @@ def clear_resize(state) -> None:
 def apply_term(state) -> int:
     if state.cur_term is None:
         return -1
-
-    new_term = _copy_term_attrs(state.cur_term)
-    if new_term is None:
-        return -1
-
-    try:
-        termios.tcsetattr(state.in_fd, termios.TCSANOW, new_term)
-        state.cur_term = new_term
-        return 0
-    except (termios.error, OSError, ValueError):
-        return -1
+    return _apply_term_attrs(state, state.cur_term)
 
 
 def raw(state) -> int:
     if state.cur_term is None:
         return -1
-    state.cur_term[3] &= ~(termios.ICANON | termios.ISIG | termios.ECHO)
-    state.cur_term[6][termios.VMIN] = 1
-    state.cur_term[6][termios.VTIME] = 0
-    return apply_term(state)
+    new_term = _copy_term_attrs(state.cur_term)
+    if new_term is None:
+        return -1
+    new_term[3] &= ~(termios.ICANON | termios.ISIG | termios.ECHO)
+    new_term[6][termios.VMIN] = 1
+    new_term[6][termios.VTIME] = 0
+    return _apply_term_attrs(state, new_term)
 
 
 def noraw(state) -> int:
     if state.cur_term is None:
         return -1
-    state.cur_term[3] |= (termios.ICANON | termios.ISIG)
-    return apply_term(state)
+    new_term = _copy_term_attrs(state.cur_term)
+    if new_term is None:
+        return -1
+    new_term[3] |= (termios.ICANON | termios.ISIG)
+    return _apply_term_attrs(state, new_term)
 
 
 def cbreak(state) -> int:
     if state.cur_term is None:
         return -1
-    state.cur_term[3] &= ~termios.ICANON
-    state.cur_term[6][termios.VMIN] = 1
-    state.cur_term[6][termios.VTIME] = 0
-    return apply_term(state)
+    new_term = _copy_term_attrs(state.cur_term)
+    if new_term is None:
+        return -1
+    new_term[3] &= ~termios.ICANON
+    new_term[6][termios.VMIN] = 1
+    new_term[6][termios.VTIME] = 0
+    return _apply_term_attrs(state, new_term)
 
 
 def nocbreak(state) -> int:
     if state.cur_term is None:
         return -1
-    state.cur_term[3] |= termios.ICANON
-    return apply_term(state)
+    new_term = _copy_term_attrs(state.cur_term)
+    if new_term is None:
+        return -1
+    new_term[3] |= termios.ICANON
+    return _apply_term_attrs(state, new_term)
 
 
 def echo(state) -> int:
     if state.cur_term is None:
         return -1
-    state.cur_term[3] |= termios.ECHO
-    return apply_term(state)
+    new_term = _copy_term_attrs(state.cur_term)
+    if new_term is None:
+        return -1
+    new_term[3] |= termios.ECHO
+    return _apply_term_attrs(state, new_term)
 
 
 def noecho(state) -> int:
     if state.cur_term is None:
         return -1
-    state.cur_term[3] &= ~termios.ECHO
-    return apply_term(state)
+    new_term = _copy_term_attrs(state.cur_term)
+    if new_term is None:
+        return -1
+    new_term[3] &= ~termios.ECHO
+    return _apply_term_attrs(state, new_term)
 
 
 def _on_sigwinch(signum, frame) -> None:
