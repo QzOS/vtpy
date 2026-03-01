@@ -13,7 +13,7 @@ def test_check_resize_noop_when_size_unchanged(monkeypatch):
     lc.hashes = []
     lc.resize_pending = False
 
-    monkeypatch.setattr("lc_screen._get_winsize", lambda: (3, 4))
+    monkeypatch.setattr("lc_screen.backend.get_size", lambda state: (3, 4))
     assert lc_check_resize() == 0
     assert lc.stdscr is win
 
@@ -46,7 +46,7 @@ def test_check_resize_rebuilds_screen_and_preserves_overlap(monkeypatch):
     fake_term = FakeTerm()
     lc.term = fake_term
 
-    monkeypatch.setattr("lc_screen._get_winsize", lambda: (4, 5))
+    monkeypatch.setattr("lc_screen.backend.get_size", lambda state: (4, 5))
     assert lc_check_resize() == 1
 
     assert lc.lines == 4
@@ -90,7 +90,7 @@ def test_check_resize_clamps_cursor_when_new_size_is_smaller(monkeypatch):
 
     lc.term = FakeTerm()
 
-    monkeypatch.setattr("lc_screen._get_winsize", lambda: (2, 3))
+    monkeypatch.setattr("lc_screen.backend.get_size", lambda state: (2, 3))
     assert lc_check_resize() == 1
     assert lc.stdscr.cury == 1
     assert lc.stdscr.curx == 2
@@ -103,7 +103,7 @@ def test_check_resize_ignores_invalid_size(monkeypatch):
     lc.cols = 2
     lc.resize_pending = True
 
-    monkeypatch.setattr("lc_screen._get_winsize", lambda: (0, 0))
+    monkeypatch.setattr("lc_screen.backend.get_size", lambda state: (0, 0))
     assert lc_check_resize() == 0
     assert lc.stdscr is win
     assert lc.resize_pending is False
@@ -148,7 +148,7 @@ def test_readkey_returns_resize_event(monkeypatch):
 
     lc.term = FakeTerm()
 
-    monkeypatch.setattr("lc_screen._get_winsize", lambda: (3, 4))
+    monkeypatch.setattr("lc_screen.backend.get_size", lambda state: (3, 4))
 
     parser = LCKeyParser(FakeInput())
     key = LCKey()

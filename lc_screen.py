@@ -1,6 +1,3 @@
-import fcntl
-import signal
-import struct
 import sys
 import termios
 from contextlib import contextmanager
@@ -12,6 +9,7 @@ from lc_term import (
     LC_FORCEPAINT,
     Terminal,
 )
+from lc_platform import backend
 from lc_window import (
     LCCell,
     LCWin,
@@ -59,26 +57,10 @@ lc = LCState()
 
 
 def _get_winsize() -> tuple[int, int]:
-    try:
-        buf = fcntl.ioctl(lc.out_fd, termios.TIOCGWINSZ, b'\x00' * 8)
-        rows, cols, _xp, _yp = struct.unpack('HHHH', buf)
-        if rows > 0 and cols > 0:
-            return rows, cols
-    except OSError:
-        pass
-    return 24, 80
-
-
-def _on_sigwinch(signum, frame) -> None:
-    del signum
-    del frame
-    lc.resize_pending = True
+    return backend.get_size(lc)
 
 
 def lc_init() -> Optional[LCWin]:
-    lc.in_fd = sys.stdin.fileno()
-    lc.out_fd = sys.stdout.fileno()
-    lc.term.out_fd = lc.out_fd
     rows, cols = _get_winsize()
     lc.lines = rows
     lc.cols = cols
@@ -87,13 +69,10 @@ def lc_init() -> Optional[LCWin]:
     if lc.stdscr is None:
         return None
 
-    lc.orig_term = termios.tcgetattr(lc.in_fd)
-    lc.cur_term = termios.tcgetattr(lc.in_fd)
-
-    lc.cur_term[3] &= ~(termios.ICANON | termios.ECHO)
-    lc.cur_term[6][termios.VMIN] = 1
-    lc.cur_term[6][termios.VTIME] = 0
-    termios.tcsetattr(lc.in_fd, termios.TCSAFLUSH, lc.cur_term)
+    if backend.init(lc) != 0:
+        lc_free(lc.stdscr)
+        lc.stdscr = None
+        return None
 
     lc.term.reset_state()
     lc.term.use_alternate_screen(True)
@@ -108,14 +87,10 @@ def lc_init() -> Optional[LCWin]:
     lc.cur_x = 0
     lc.cur_attr = LC_ATTR_NONE
 
-    lc.resize_pending = False
-    lc._prev_winch_handler = signal.signal(signal.SIGWINCH, _on_sigwinch)
-
     return lc.stdscr
 
 
 def lc_end() -> int:
-    # Emit terminal restore sequences before restoring termios.
     try:
         lc.term.set_attr(LC_ATTR_NONE)
         lc.term.set_wrap(True)
@@ -126,18 +101,8 @@ def lc_end() -> int:
     except OSError:
         pass
 
-    if lc._prev_winch_handler is not None:
-        try:
-            signal.signal(signal.SIGWINCH, lc._prev_winch_handler)
-        except (OSError, ValueError):
-            pass
-
     lc.term.reset_state()
-    if lc.orig_term is not None:
-        try:
-            termios.tcsetattr(lc.in_fd, termios.TCSAFLUSH, lc.orig_term)
-        except OSError:
-            pass
+    backend.end(lc)
 
     if lc.stdscr is not None:
         lc_free(lc.stdscr)
@@ -145,13 +110,7 @@ def lc_end() -> int:
 
     lc.screen = []
     lc.hashes = []
-    lc.orig_term = None
-    lc.cur_term = None
     lc.pushback_byte = None
-    lc.resize_pending = False
-    lc._prev_winch_handler = None
-    lc.in_fd = 0
-    lc.out_fd = 1
     lc.cur_y = 0
     lc.cur_x = 0
     lc.cur_attr = LC_ATTR_NONE
@@ -177,8 +136,12 @@ def lc_get_size() -> tuple[int, int]:
 
 
 def lc_check_resize() -> int:
+    resize_seen = backend.poll_resize(lc)
     old = lc.stdscr
     rows, cols = _get_winsize()
+
+    if resize_seen:
+        backend.clear_resize(lc)
 
     if rows <= 0 or cols <= 0:
         lc.resize_pending = False
@@ -188,7 +151,7 @@ def lc_check_resize() -> int:
         lc.resize_pending = False
         return 0
 
-    if not lc.resize_pending and rows == lc.lines and cols == lc.cols:
+    if not resize_seen and rows == lc.lines and cols == lc.cols:
         return 0
 
     new_win = lc_new(rows, cols, old.begy, old.begx)
@@ -231,11 +194,7 @@ def lc_check_resize() -> int:
 
 
 def _apply_term() -> int:
-    try:
-        termios.tcsetattr(lc.in_fd, termios.TCSAFLUSH, lc.cur_term)
-        return 0
-    except OSError:
-        return -1
+    return backend.apply_term(lc)
 
 
 def lc_raw() -> int:
