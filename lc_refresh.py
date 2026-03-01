@@ -99,11 +99,10 @@ def lc_wrefresh(win: Optional[LCWin]) -> int:
         #   - dead windows must fail refresh
         #   - derived windows from the old topology must fail refresh
         #   - only a root refresh may fall through to the rebuilt stdscr
-        if requested_win is not None:
-            if not requested_win.alive:
-                return -1
-            if requested_win.parent is not None:
-                return -1
+        if not requested_win.alive:
+            return -1
+        if requested_win.parent is not None:
+            return -1
         win = lc.stdscr
 
     if win is None or not win.alive:
