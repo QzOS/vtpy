@@ -1,6 +1,5 @@
 from dataclasses import dataclass, field
 from typing import Optional
-
 from lc_term import LC_DIRTY, LC_FORCEPAINT, LC_ATTR_NONE
 
 
@@ -27,6 +26,79 @@ class LCWin:
     cury: int = 0
     curx: int = 0
     lines: list[LCRow] = field(default_factory=list)
+
+
+def _clip_range(start: int, length: int, limit: int) -> tuple[int, int]:
+    if length <= 0 or limit <= 0:
+        return 0, 0
+
+    end = start + length
+    if end <= 0 or start >= limit:
+        return 0, 0
+
+    if start < 0:
+        start = 0
+    if end > limit:
+        end = limit
+    if start >= end:
+        return 0, 0
+    return start, end
+
+
+def _clip_hspan(win: Optional[LCWin], y: int, x: int, width: int) -> tuple[Optional[LCRow], int, int]:
+    if win is None:
+        return None, 0, 0
+    if y < 0 or y >= win.maxy:
+        return None, 0, 0
+    start, end = _clip_range(x, width, win.maxx)
+    if start >= end:
+        return None, 0, 0
+    return win.lines[y], start, end
+
+
+def _clip_vspan(win: Optional[LCWin], y: int, x: int, height: int) -> tuple[int, int]:
+    if win is None:
+        return 0, 0
+    if x < 0 or x >= win.maxx:
+        return 0, 0
+    return _clip_range(y, height, win.maxy)
+
+
+def _clip_rect(win: Optional[LCWin], y0: int, x0: int, y1: int, x1: int) -> tuple[int, int, int, int]:
+    if win is None:
+        return 0, 0, 0, 0
+    if y0 >= y1 or x0 >= x1:
+        return 0, 0, 0, 0
+
+    ys, ye = _clip_range(y0, y1 - y0, win.maxy)
+    xs, xe = _clip_range(x0, x1 - x0, win.maxx)
+    if ys >= ye or xs >= xe:
+        return 0, 0, 0, 0
+    return ys, xs, ye, xe
+
+
+def _write_cell(win: Optional[LCWin], y: int, x: int, ch: str, attr: int) -> None:
+    if win is None:
+        return
+    if y < 0 or y >= win.maxy or x < 0 or x >= win.maxx:
+        return
+    if not ch:
+        return
+
+    ln = win.lines[y]
+    ln.line[x].ch = ch[0]
+    ln.line[x].attr = attr
+    mark_dirty(ln, x, x + 1, win.maxx)
+
+
+def _advance_cursor(win: LCWin) -> None:
+    win.curx += 1
+    if win.curx >= win.maxx:
+        win.curx = 0
+        if win.cury < win.maxy - 1:
+            win.cury += 1
+        else:
+            win.cury = win.maxy  # Signal that we've wrapped on the last row
 
 
 def mark_dirty(ln: Optional[LCRow], start: int, end: int, maxx: int) -> None:
@@ -87,24 +159,20 @@ def lc_free(win: Optional[LCWin]) -> int:
 def fill_rect(win: Optional[LCWin], y0: int, x0: int, y1: int, x1: int, ch: str) -> None:
     if win is None:
         return
-    if y0 >= y1 or y0 >= win.maxy:
+    if not ch:
         return
 
-    if y1 > win.maxy:
-        y1 = win.maxy
+    ys, xs, ye, xe = _clip_rect(win, y0, x0, y1, x1)
+    if ys >= ye or xs >= xe:
+        return
 
-    for y in range(y0, y1):
+    for y in range(ys, ye):
         ln = win.lines[y]
-        start = min(max(x0, 0), win.maxx)
-        end = min(max(x1, 0), win.maxx)
-        if start >= end:
-            continue
-
-        for x in range(start, end):
+        for x in range(xs, xe):
             ln.line[x].ch = ch
             ln.line[x].attr = LC_ATTR_NONE
 
-        mark_dirty(ln, start, end, win.maxx)
+        mark_dirty(ln, xs, xe, win.maxx)
 
 
 def lc_wclear(win: Optional[LCWin]) -> int:
@@ -138,19 +206,23 @@ def lc_wclrtoeol(win: Optional[LCWin]) -> int:
 def lc_waddstr(win: Optional[LCWin], s: str) -> int:
     if win is None or s is None:
         return -1
+    if win.maxx <= 0 or win.maxy <= 0:
+        return 0
+    if win.cury < 0 or win.cury >= win.maxy or win.curx < 0 or win.curx >= win.maxx:
+        return -1
 
     for ch in s:
-        if win.curx >= win.maxx or win.cury >= win.maxy:
-            return -1
+        if win.cury >= win.maxy:
+            win.cury = win.maxy - 1  # Restore cursor to last valid row
+            break
         ln = win.lines[win.cury]
         ln.line[win.curx].ch = ch
         ln.line[win.curx].attr = LC_ATTR_NONE
         mark_dirty(ln, win.curx, win.curx + 1, win.maxx)
-        win.curx += 1
-        if win.curx >= win.maxx:
-            win.curx = 0
-            if win.cury < win.maxy - 1:
-                win.cury += 1
+        _advance_cursor(win)
+    # Ensure cursor is within valid bounds after loop
+    if win.cury >= win.maxy:
+        win.cury = win.maxy - 1
     return 0
 
 
@@ -179,12 +251,7 @@ def lc_wput(win: Optional[LCWin], ch: int, attr: int = LC_ATTR_NONE) -> int:
     ln.line[win.curx].ch = outch
     ln.line[win.curx].attr = attr
     mark_dirty(ln, win.curx, win.curx + 1, win.maxx)
-
-    win.curx += 1
-    if win.curx >= win.maxx:
-        win.curx = 0
-        if win.cury < win.maxy - 1:
-            win.cury += 1
+    _advance_cursor(win)
     return 0
 
 
@@ -204,21 +271,19 @@ def lc_wdraw_hline(
 ) -> int:
     if win is None:
         return -1
-    if width <= 0:
-        return 0
-    if y < 0 or y >= win.maxy:
-        return -1
-    if x < 0 or x >= win.maxx:
-        return -1
     if not ch:
         return -1
+    if width <= 0:
+        return 0
 
-    end = min(win.maxx, x + width)
-    ln = win.lines[y]
-    for cx in range(x, end):
+    ln, start, end = _clip_hspan(win, y, x, width)
+    if ln is None or start >= end:
+        return 0
+
+    for cx in range(start, end):
         ln.line[cx].ch = ch[0]
         ln.line[cx].attr = attr
-    mark_dirty(ln, x, end, win.maxx)
+    mark_dirty(ln, start, end, win.maxx)
     return 0
 
 
@@ -232,17 +297,16 @@ def lc_wdraw_vline(
 ) -> int:
     if win is None:
         return -1
-    if height <= 0:
-        return 0
-    if x < 0 or x >= win.maxx:
-        return -1
-    if y < 0 or y >= win.maxy:
-        return -1
     if not ch:
         return -1
+    if height <= 0:
+        return 0
 
-    end = min(win.maxy, y + height)
-    for cy in range(y, end):
+    start, end = _clip_vspan(win, y, x, height)
+    if start >= end:
+        return 0
+
+    for cy in range(start, end):
         ln = win.lines[cy]
         ln.line[x].ch = ch[0]
         ln.line[x].attr = attr
@@ -266,12 +330,10 @@ def lc_wdraw_box(
 ) -> int:
     if win is None:
         return -1
+    if not hch or not vch or not tl or not tr or not bl or not br:
+        return -1
     if height <= 0 or width <= 0:
         return 0
-    if y < 0 or x < 0:
-        return -1
-    if y >= win.maxy or x >= win.maxx:
-        return -1
 
     if height == 1:
         return lc_wdraw_hline(win, y, x, width, hch, attr)
@@ -279,33 +341,16 @@ def lc_wdraw_box(
     if width == 1:
         return lc_wdraw_vline(win, y, x, height, vch, attr)
 
-    lc_wdraw_hline(win, y, x + 1, max(0, width - 2), hch, attr)
-    lc_wdraw_hline(win, y + height - 1, x + 1, max(0, width - 2), hch, attr)
-    lc_wdraw_vline(win, y + 1, x, max(0, height - 2), vch, attr)
-    lc_wdraw_vline(win, y + 1, x + width - 1, max(0, height - 2), vch, attr)
+    bottom_y = y + height - 1
+    right_x = x + width - 1
 
-    if 0 <= y < win.maxy and 0 <= x < win.maxx:
-        ln = win.lines[y]
-        ln.line[x].ch = tl[0]
-        ln.line[x].attr = attr
-        mark_dirty(ln, x, x + 1, win.maxx)
+    lc_wdraw_hline(win, y, x + 1, width - 2, hch, attr)
+    lc_wdraw_hline(win, bottom_y, x + 1, width - 2, hch, attr)
+    lc_wdraw_vline(win, y + 1, x, height - 2, vch, attr)
+    lc_wdraw_vline(win, y + 1, right_x, height - 2, vch, attr)
 
-    if 0 <= y < win.maxy and 0 <= x + width - 1 < win.maxx:
-        ln = win.lines[y]
-        ln.line[x + width - 1].ch = tr[0]
-        ln.line[x + width - 1].attr = attr
-        mark_dirty(ln, x + width - 1, x + width, win.maxx)
-
-    if 0 <= y + height - 1 < win.maxy and 0 <= x < win.maxx:
-        ln = win.lines[y + height - 1]
-        ln.line[x].ch = bl[0]
-        ln.line[x].attr = attr
-        mark_dirty(ln, x, x + 1, win.maxx)
-
-    if 0 <= y + height - 1 < win.maxy and 0 <= x + width - 1 < win.maxx:
-        ln = win.lines[y + height - 1]
-        ln.line[x + width - 1].ch = br[0]
-        ln.line[x + width - 1].attr = attr
-        mark_dirty(ln, x + width - 1, x + width, win.maxx)
-
+    _write_cell(win, y, x, tl, attr)
+    _write_cell(win, y, right_x, tr, attr)
+    _write_cell(win, bottom_y, x, bl, attr)
+    _write_cell(win, bottom_y, right_x, br, attr)
     return 0
