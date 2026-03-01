@@ -4,6 +4,8 @@
 
 ### Test 1.1 — Child write is visible through parent refresh
 
+**Testfile:** `tests/test_lc_subwindow.py` (`test_subwin_shares_backing_store_for_fill`, `test_subwin_shares_backing_store_for_text`, `test_subwin_dirty_propagates_to_parent`)
+
 **Purpose:** Verify upward dirty propagation + shared backing + root-oriented refresh.
 
 **Setup**
@@ -26,6 +28,8 @@
 ---
 
 ### Test 1.2 — Parent write is visible through root refresh in the child area
+
+**Testfile:** `tests/test_refresh_and_cursor_contracts.py` (`test_parent_write_updates_child_shared_cells_without_marking_child_dirty`)
 
 **Purpose:** Verify that root refresh is the true presentation path even for regions covered by child windows.
 
@@ -52,6 +56,8 @@ These are the most important tests because they prevent future documentation dri
 
 ### Test 2.1 — Parent write does not automatically mark child dirty
 
+**Testfile:** `tests/test_refresh_and_cursor_contracts.py` (`test_parent_write_updates_child_shared_cells_without_marking_child_dirty`)
+
 **Purpose:** Verify the real asymmetry in dirty metadata.
 
 **Setup**
@@ -75,6 +81,8 @@ This test is nearly more important than the refresh test because it explains why
 
 ### Test 2.2 — Sibling write does not automatically mark another sibling dirty
 
+**Testfile:** `tests/test_refresh_and_cursor_contracts.py` (`test_sibling_write_does_not_mark_overlapping_sibling_dirty`)
+
 **Purpose:** Verify that lateral dirty propagation does not exist.
 
 **Setup**
@@ -97,6 +105,8 @@ This test is nearly more important than the refresh test because it explains why
 ---
 
 ### Test 2.3 — Parent write followed by child refresh must not be assumed coherent
+
+**Testfile:** `tests/test_refresh_and_cursor_contracts.py` (`test_child_refresh_is_not_the_coherent_commit_path_after_parent_write`)
 
 This should be tested carefully because you do not want a test that depends too much on internal terminal emission.
 
@@ -131,6 +141,8 @@ This is long, but crystal clear.
 
 ### Test 3.1 — Refresh on invalidated child after resize fails
 
+**Testfile:** `tests/test_refresh_and_cursor_contracts.py` (`test_wrefresh_rejects_stale_subwindow_after_resize`)
+
 **Purpose:** Lock the most important topology rule.
 
 **Setup**
@@ -147,6 +159,8 @@ This is long, but crystal clear.
 ---
 
 ### Test 3.2 — Root refresh after resize continues to work
+
+**Testfile:** `tests/test_refresh_and_cursor_contracts.py` (`test_wrefresh_root_after_resize_uses_rebuilt_stdscr`), `tests/test_lc_resize.py` (`test_check_resize_rebuilds_screen_and_preserves_overlap`)
 
 **Purpose:** Verify that resize fallthrough applies only to root.
 
@@ -166,6 +180,8 @@ This is long, but crystal clear.
 ## 4. Dead-window contract
 
 ### Test 4.1 — Refresh on dead window returns `-1` immediately
+
+**Testfile:** `tests/test_refresh_and_cursor_contracts.py` (`test_wrefresh_rejects_dead_window`)
 
 **Purpose:** Lock in the behavior already improved.
 
@@ -188,7 +204,9 @@ The last point is important: fail should be a clean fail.
 
 ### Test 5.1 — Row hash shortcut is not used for child
 
-**Purpose:** Prevent future “smart” optimizations that would break the model.
+**Testfile:** `tests/test_refresh_hash_contracts.py` (`test_subwindow_refresh_does_not_poison_root_row_hash_shortcut`)
+
+**Purpose:** Prevent future "smart" optimizations that would break the model.
 
 **Setup**
 - Create root + child.
@@ -205,6 +223,8 @@ If you want less implementation-tight tests, this can instead be a smaller unit 
 ---
 
 ### Test 5.2 — Full-width root row may use hash shortcut
+
+**Testfile:** `tests/test_refresh_hash_contracts.py` (`test_root_row_hash_shortcut_can_skip_clean_repeat_refresh`, `test_row_hash_shortcut_is_not_used_for_non_full_width_root_window`)
 
 **Purpose:** Preserve optimization where it is legitimate.
 
@@ -225,6 +245,8 @@ This is good to lock in because panel helpers can otherwise be treated as someth
 
 ### Test 6.1 — Panel content subwindow is a regular shared-backing subwindow
 
+**Testfile:** `tests/test_lc_subwindow.py` (`test_panel_content_subwin_shares_backing_store`, `test_panel_content_subwin_nested_under_child_window`)
+
 **Setup**
 - Create root.
 - Create panel.
@@ -239,6 +261,8 @@ This is good to lock in because panel helpers can otherwise be treated as someth
 ---
 
 ### Test 6.2 — Panel content subwindow invalidates on resize like any other child
+
+**Testfile:** missing
 
 **Expected**
 - Same invalidation rule.
