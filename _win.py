@@ -351,8 +351,11 @@ def _read_console_events(state, block: bool) -> int:
             for i in range(count.value):
                 _handle_console_record(state, records[i])
 
-            if block and (_peek_input_byte(state) or poll_resize(state)):
-                return 1
+            if block:
+                with _resize_lock:
+                    resize_pending = bool(state.resize_pending)
+                if _peek_input_byte(state) or resize_pending:
+                    return 1
             if not block:
                 return 1
         except (OSError, ValueError):
