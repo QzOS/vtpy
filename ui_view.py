@@ -9,7 +9,7 @@ from lc_window import (
     lc_wdraw_panel,
     lc_wfill,
     lc_wmove,
-    lc_waddstr,
+    lc_wput,
 )
 from ui_layout import (
     UIRect,
@@ -225,6 +225,24 @@ def ui_view_set_text(view: Optional[UIView], text: str) -> int:
     return 0
 
 
+def ui_view_set_text_attr(view: Optional[UIView], attr: int) -> int:
+    if view is None:
+        return -1
+    view.text_attr = attr
+    ui_view_mark_dirty(view)
+    return 0
+
+
+def ui_view_set_text_align(view: Optional[UIView], align: int) -> int:
+    if view is None:
+        return -1
+    if align not in (UI_ALIGN_LEFT, UI_ALIGN_CENTER, UI_ALIGN_RIGHT):
+        return -1
+    view.text_align = align
+    ui_view_mark_dirty(view)
+    return 0
+
+
 def ui_view_set_layout_stack_vertical(view: Optional[UIView], gap: int = 0) -> int:
     if view is None:
         return -1
@@ -277,6 +295,19 @@ def ui_view_mark_dirty(view: Optional[UIView]) -> None:
     while cur is not None:
         cur.set_dirty()
         cur = cur.parent
+
+
+def ui_view_is_subtree_dirty(view: Optional[UIView]) -> bool:
+    if view is None:
+        return False
+    if view.is_dirty():
+        return True
+
+    for child in view.children:
+        if ui_view_is_subtree_dirty(child):
+            return True
+
+    return False
 
 
 def ui_view_bind_rect(parent_win: Optional[LCWin], rect: UIRect) -> Optional[LCWin]:
@@ -486,20 +517,101 @@ def ui_view_handle_event(view: Optional[UIView], ev: UIEvent) -> int:
     return UI_CMD_NONE
 
 
-def _ui_view_draw_label(view: UIView) -> int:
-    r = ui_view_draw_rect(view)
-    text = view.text
+def _ui_text_lines(text: str) -> list[str]:
+    if not text:
+        return []
+    return text.split("\n")
+
+
+def _ui_text_clip_line(text: str, width: int) -> str:
+    if not text:
+        return ""
+    if width <= 0:
+        return ""
+    if len(text) <= width:
+        return text
+    return text[:width]
+
+
+def _ui_text_align_x(width: int, text: str, align: int) -> int:
     x = 0
 
-    if view.bound_win is None:
-        return -1
-    if ui_rect_is_empty(r):
+    if width <= 0:
+        return 0
+    if text is None:
         return 0
 
-    if text is None:
-        text = ""
-    if len(text) > r.width:
-        text = text[:r.width]
+    n = len(text)
+    if n >= width:
+        return 0
+
+    if align == UI_ALIGN_CENTER:
+        x = (width - n) // 2
+    elif align == UI_ALIGN_RIGHT:
+        x = width - n
+    else:
+        x = 0
+    if x < 0:
+        return 0
+    return x
+
+
+def _ui_draw_text_line(
+    win: Optional[LCWin],
+    y: int,
+    width: int,
+    text: str,
+    attr: int,
+    align: int,
+) -> int:
+    x = 0
+    clipped = ""
+    i = 0
+
+    if win is None:
+        return -1
+    if width <= 0:
+        return 0
+
+    clipped = _ui_text_clip_line(text, width)
+    if clipped == "":
+        return 0
+
+    x = _ui_text_align_x(width, clipped, align)
+    for i, ch in enumerate(clipped):
+        if lc_wmove(win, y, x + i) != 0:
+            return -1
+        if lc_wput(win, ord(ch), attr) != 0:
+            return -1
+    return 0
+
+
+def _ui_draw_text_block(
+    win: Optional[LCWin],
+    rect: UIRect,
+    text: str,
+    attr: int,
+    align: int,
+) -> int:
+    lines = []
+    row = 0
+
+    if win is None or rect is None:
+        return -1
+    if ui_rect_is_empty(rect):
+        return 0
+
+    lines = _ui_text_lines(text)
+    for row, line in enumerate(lines):
+        if row >= rect.height:
+            break
+        if _ui_draw_text_line(win, row, rect.width, line, attr, align) != 0:
+            return -1
+    return 0
+
+
+def _ui_view_draw_label(view: UIView) -> int:
+    r = ui_view_draw_rect(view)
 
     if view.fill_ch:
         if lc_wfill(view.bound_win, 0, 0, r.height, r.width, view.fill_ch, view.fill_attr) != 0:
@@ -508,19 +620,7 @@ def _ui_view_draw_label(view: UIView) -> int:
         if lc_wclear(view.bound_win) != 0:
             return -1
 
-    if not text or r.height <= 0 or r.width <= 0:
-        return 0
-
-    if view.text_align == UI_ALIGN_CENTER:
-        x = max(0, (r.width - len(text)) // 2)
-    elif view.text_align == UI_ALIGN_RIGHT:
-        x = max(0, r.width - len(text))
-    else:
-        x = 0
-
-    if lc_wmove(view.bound_win, 0, x) != 0:
-        return -1
-    return lc_waddstr(view.bound_win, text)
+    return _ui_draw_text_block(view.bound_win, r, view.text, view.text_attr, view.text_align)
 
 
 def _ui_view_draw_panel(view: UIView) -> int:
@@ -570,7 +670,6 @@ def ui_view_draw_self(view: Optional[UIView], ctx: Optional[UIDrawContext] = Non
 
 
 def ui_view_draw(view: Optional[UIView]) -> int:
-    child = None
     ctx = UIDrawContext()
 
     if view is None:
@@ -580,12 +679,26 @@ def ui_view_draw(view: Optional[UIView]) -> int:
     if view.bound_win is None:
         return -1
 
+    # Dirty-aware traversal contract:
+    #
+    # - A clean view may skip draw_self().
+    # - Traversal must still continue if any descendant is dirty.
+    # - A fully clean subtree is skipped entirely.
+    #
+    # This keeps the runtime retained and event-driven without yet introducing
+    # finer-grained per-widget invalidation semantics beyond subtree dirtiness.
+    if not ui_view_is_subtree_dirty(view):
+        return 0
+
     ctx.is_root = (view.parent is None)
-    if ui_view_draw_self(view, ctx) != 0:
-        return -1
-    view.clear_dirty()
+
+    if view.is_dirty():
+        if ui_view_draw_self(view, ctx) != 0:
+            return -1
+        view.clear_dirty()
 
     for child in view.children:
         if ui_view_draw(child) != 0:
             return -1
+
     return 0
