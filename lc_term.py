@@ -1,5 +1,4 @@
 import os
-from typing import Iterable
 
 LC_OK = 0
 LC_ERR = -1
@@ -87,6 +86,9 @@ class Terminal:
             return
 
         self.write_bytes(self.attr_bytes(attr))
+        self._last_attr = attr
+
+    def note_attr(self, attr: int) -> None:
         self._last_attr = attr
 
     def reset_state(self) -> None:

@@ -31,6 +31,9 @@ class FakeTerm:
     def clear_screen(self) -> None:
         pass
 
+    def note_attr(self, attr: int) -> None:
+        self._last_attr = attr
+
     def reset_state(self) -> None:
         self._last_attr = None
 

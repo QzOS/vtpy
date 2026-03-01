@@ -1,5 +1,4 @@
 import fcntl
-import os
 import struct
 import sys
 import termios
@@ -103,8 +102,7 @@ def lc_end() -> int:
         lc_keypad(False)
         lc.term.show_cursor(True)
         lc.term.use_alternate_screen(False)
-        if lc.out_fd >= 0:
-            os.fsync(lc.out_fd)
+        sys.stdout.flush()
     except OSError:
         pass
 

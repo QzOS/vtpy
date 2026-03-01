@@ -73,3 +73,14 @@ def test_set_wrap():
     term.output.clear()
     term.set_wrap(False)
     assert term.output == ["\x1b[?7l"]
+
+
+def test_note_attr():
+    term = FakeTerminal()
+    term.note_attr(LC_ATTR_BOLD)
+    assert term._last_attr == LC_ATTR_BOLD
+    # note_attr should not produce any output
+    assert term.output == []
+    # subsequent set_attr with same value should not emit
+    term.set_attr(LC_ATTR_BOLD)
+    assert term.output == []

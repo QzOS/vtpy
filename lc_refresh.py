@@ -4,6 +4,8 @@ from lc_term import LC_ATTR_NONE, LC_DIRTY, LC_FORCEPAINT
 from lc_window import LCCell, LCWin
 from lc_screen import lc
 
+LC_RENDER_BATCH_BYTES = 8192
+
 
 def line_hash(cells: list[LCCell]) -> int:
     # FNV-1a over rendered cell content and attr.
@@ -60,7 +62,7 @@ def _emit_run(
     if lc.cur_attr != attr:
         _append_attr(buf, attr)
         lc.cur_attr = attr
-        lc.term._last_attr = attr
+        lc.term.note_attr(attr)
 
     _append_text(buf, text)
     lc.cur_y = abs_y
@@ -152,7 +154,7 @@ def lc_wrefresh(win: Optional[LCWin]) -> int:
 
         # Keep output writes bounded even when many rows changed.
         # This is a throughput/simplicity compromise, not a semantic boundary.
-        if len(out) >= 8192:
+        if len(out) >= LC_RENDER_BATCH_BYTES:
             _flush(out)
 
         ln.firstch = 0
@@ -168,7 +170,7 @@ def lc_wrefresh(win: Optional[LCWin]) -> int:
 
     if lc.cur_attr != LC_ATTR_NONE:
         _append_attr(out, LC_ATTR_NONE)
-        lc.term._last_attr = LC_ATTR_NONE
+        lc.term.note_attr(LC_ATTR_NONE)
     lc.cur_attr = LC_ATTR_NONE
 
     _flush(out)
