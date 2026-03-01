@@ -1,4 +1,5 @@
 import os
+from typing import Iterable
 
 LC_OK = 0
 LC_ERR = -1
@@ -25,6 +26,7 @@ class TermOps:
     disable_wrap = "\x1b[?7l"
     keypad_transmit_on = "\x1b[?1h\x1b="
     keypad_transmit_off = "\x1b[?1l\x1b>"
+    sgr_reset = "\x1b[0m"
 
 
 class Terminal:
@@ -36,9 +38,19 @@ class Terminal:
     def write(self, s: str) -> None:
         os.write(self.out_fd, s.encode('utf-8', 'replace'))
 
+    def write_bytes(self, data: bytes | bytearray) -> None:
+        if data:
+            os.write(self.out_fd, bytes(data))
+
     def move(self, y: int, x: int) -> None:
         # ANSI/VT cursor positions are 1-based.
         self.write(self.ops.move_fmt % (y + 1, x + 1))
+
+    def move_bytes(self, y: int, x: int) -> bytes:
+        return (self.ops.move_fmt % (y + 1, x + 1)).encode("ascii")
+
+    def encode_text(self, s: str) -> bytes:
+        return s.encode("utf-8", "replace")
 
     def clear_screen(self) -> None:
         self.write(self.ops.clear_screen)
@@ -56,14 +68,9 @@ class Terminal:
     def set_wrap(self, on: bool) -> None:
         self.write(self.ops.enable_wrap if on else self.ops.disable_wrap)
 
-    def set_attr(self, attr: int) -> None:
-        if attr == self._last_attr:
-            return
-
+    def attr_bytes(self, attr: int) -> bytes:
         if attr == LC_ATTR_NONE:
-            self.write("\x1b[0m")
-            self._last_attr = attr
-            return
+            return self.ops.sgr_reset.encode("ascii")
 
         parts = ["0"]
         if attr & LC_ATTR_BOLD:
@@ -73,7 +80,13 @@ class Terminal:
         if attr & LC_ATTR_REVERSE:
             parts.append("7")
 
-        self.write("\x1b[" + ";".join(parts) + "m")
+        return ("\x1b[" + ";".join(parts) + "m").encode("ascii")
+
+    def set_attr(self, attr: int) -> None:
+        if attr == self._last_attr:
+            return
+
+        self.write_bytes(self.attr_bytes(attr))
         self._last_attr = attr
 
     def reset_state(self) -> None:

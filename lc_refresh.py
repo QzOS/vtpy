@@ -1,14 +1,6 @@
-import os
 from typing import Optional
 
-from lc_term import (
-    LC_ATTR_NONE,
-    LC_DIRTY,
-    LC_FORCEPAINT,
-    LC_ATTR_BOLD,
-    LC_ATTR_UNDERLINE,
-    LC_ATTR_REVERSE,
-)
+from lc_term import LC_ATTR_NONE, LC_DIRTY, LC_FORCEPAINT
 from lc_window import LCCell, LCWin
 from lc_screen import lc
 
@@ -31,10 +23,68 @@ def lc_refresh() -> int:
     return lc_wrefresh(lc.stdscr)
 
 
+def _append_move(buf: bytearray, y: int, x: int) -> None:
+    buf.extend(lc.term.move_bytes(y, x))
+
+
+def _append_attr(buf: bytearray, attr: int) -> None:
+    buf.extend(lc.term.attr_bytes(attr))
+
+
+def _append_text(buf: bytearray, text: str) -> None:
+    buf.extend(lc.term.encode_text(text))
+
+
+def _flush(buf: bytearray) -> None:
+    if not buf:
+        return
+    lc.term.write_bytes(buf)
+    buf.clear()
+
+
+def _emit_run(
+    buf: bytearray,
+    abs_y: int,
+    abs_x: int,
+    text: str,
+    attr: int,
+) -> None:
+    if not text:
+        return
+
+    if lc.cur_y != abs_y or lc.cur_x != abs_x:
+        _append_move(buf, abs_y, abs_x)
+        lc.cur_y = abs_y
+        lc.cur_x = abs_x
+
+    if lc.cur_attr != attr:
+        _append_attr(buf, attr)
+        lc.cur_attr = attr
+        lc.term._last_attr = attr
+
+    _append_text(buf, text)
+    lc.cur_y = abs_y
+    lc.cur_x = abs_x + len(text)
+
+
+def _flush_cell_run(
+    buf: bytearray,
+    abs_y: int,
+    run_start_x: int,
+    run_cells: list[LCCell],
+) -> None:
+    if not run_cells:
+        return
+
+    attr = run_cells[0].attr
+    text = "".join(cell.ch for cell in run_cells)
+    _emit_run(buf, abs_y, run_start_x, text, attr)
+
+
 def lc_wrefresh(win: Optional[LCWin]) -> int:
     if win is None:
         return -1
-    out_fd = lc.out_fd
+    out = bytearray()
 
     if len(lc.screen) != lc.lines or (lc.lines > 0 and len(lc.screen[0]) != lc.cols):
         lc.screen = [[LCCell(' ', LC_ATTR_NONE) for _x in range(lc.cols)] for _y in range(lc.lines)]
@@ -42,6 +92,7 @@ def lc_wrefresh(win: Optional[LCWin]) -> int:
         lc.term.clear_screen()
         lc.cur_y = 0
         lc.cur_x = 0
+        lc.term.reset_state()
         lc.cur_attr = LC_ATTR_NONE
 
     for y in range(win.maxy):
@@ -63,29 +114,46 @@ def lc_wrefresh(win: Optional[LCWin]) -> int:
         lc.hashes[abs_y] = h
         start_x = max(0, ln.firstch)
         end_x = min(win.maxx, ln.lastch + 1)
+        run_start_x = -1
+        run_cells: list[LCCell] = []
 
         for x in range(start_x, end_x):
             abs_x = win.begx + x
             if abs_x >= lc.cols:
+                _flush_cell_run(out, abs_y, run_start_x, run_cells)
+                run_start_x = -1
+                run_cells = []
                 continue
 
             cell = ln.line[x]
             scr = lc.screen[abs_y][abs_x]
             if scr.ch == cell.ch and scr.attr == cell.attr:
+                _flush_cell_run(out, abs_y, run_start_x, run_cells)
+                run_start_x = -1
+                run_cells = []
                 continue
 
-            if lc.cur_y != abs_y or lc.cur_x != abs_x:
-                lc.term.move(abs_y, abs_x)
-                lc.cur_y = abs_y
-                lc.cur_x = abs_x
+            if not run_cells:
+                run_start_x = abs_x
+                run_cells.append(cell)
+            else:
+                prev_abs_x = run_start_x + len(run_cells) - 1
+                prev_attr = run_cells[-1].attr
+                if abs_x == prev_abs_x + 1 and cell.attr == prev_attr:
+                    run_cells.append(cell)
+                else:
+                    _flush_cell_run(out, abs_y, run_start_x, run_cells)
+                    run_start_x = abs_x
+                    run_cells = [cell]
 
-            if lc.cur_attr != cell.attr:
-                lc.term.set_attr(cell.attr)
-                lc.cur_attr = cell.attr
-
-            os.write(out_fd, cell.ch.encode('utf-8', 'replace'))
             lc.screen[abs_y][abs_x] = LCCell(cell.ch, cell.attr)
-            lc.cur_x += 1
+
+        _flush_cell_run(out, abs_y, run_start_x, run_cells)
+
+        # Keep output writes bounded even when many rows changed.
+        # This is a throughput/simplicity compromise, not a semantic boundary.
+        if len(out) >= 8192:
+            _flush(out)
 
         ln.firstch = 0
         ln.lastch = 0
@@ -94,10 +162,14 @@ def lc_wrefresh(win: Optional[LCWin]) -> int:
     final_y = win.begy + win.cury
     final_x = win.begx + win.curx
     if final_y < lc.lines and final_x < lc.cols:
-        lc.term.move(final_y, final_x)
+        _append_move(out, final_y, final_x)
         lc.cur_y = final_y
         lc.cur_x = final_x
 
-    lc.term.set_attr(LC_ATTR_NONE)
+    if lc.cur_attr != LC_ATTR_NONE:
+        _append_attr(out, LC_ATTR_NONE)
+        lc.term._last_attr = LC_ATTR_NONE
     lc.cur_attr = LC_ATTR_NONE
+
+    _flush(out)
     return 0

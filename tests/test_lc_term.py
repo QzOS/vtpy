@@ -16,6 +16,10 @@ class FakeTerminal(Terminal):
     def write(self, s: str) -> None:
         self.output.append(s)
 
+    def write_bytes(self, data: bytes | bytearray) -> None:
+        if data:
+            self.output.append(bytes(data).decode("utf-8", "replace"))
+
 
 def test_set_attr_none():
     term = FakeTerminal()

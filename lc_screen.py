@@ -81,6 +81,7 @@ def lc_init() -> Optional[LCWin]:
 
     lc.term.reset_state()
     lc.term.use_alternate_screen(True)
+    lc.term.set_wrap(False)
     lc_keypad(True)
     lc.term.clear_screen()
     lc.term.show_cursor(False)
@@ -98,10 +99,12 @@ def lc_end() -> int:
     # Emit terminal restore sequences before restoring termios.
     try:
         lc.term.set_attr(LC_ATTR_NONE)
+        lc.term.set_wrap(True)
         lc_keypad(False)
         lc.term.show_cursor(True)
         lc.term.use_alternate_screen(False)
-        sys.stdout.flush()
+        if lc.out_fd >= 0:
+            os.fsync(lc.out_fd)
     except OSError:
         pass
 
@@ -121,6 +124,8 @@ def lc_end() -> int:
     lc.orig_term = None
     lc.cur_term = None
     lc.pushback_byte = None
+    lc.in_fd = 0
+    lc.out_fd = 1
     lc.cur_y = 0
     lc.cur_x = 0
     lc.cur_attr = LC_ATTR_NONE
