@@ -121,6 +121,8 @@ def test_lc_wrefresh_skips_unchanged_cells() -> None:
     win.lines[0].flags = 0
     result = lc_wrefresh(win)
     assert result == 0
-    # Should have minimal output since nothing changed
+    # Combine all output and verify 'A' was not written
     combined = b"".join(fake.writes)
-    assert b"A" not in combined or combined == b"\x1b[0m" or combined.endswith(b"\x1b[0m")
+    # Since the line is not dirty, no cell content should be written
+    # Only the final cursor move and attr reset should appear
+    assert b"A" not in combined
