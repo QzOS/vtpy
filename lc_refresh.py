@@ -1,0 +1,81 @@
+import os
+import sys
+from typing import Optional
+
+from lc_term import LC_ATTR_NONE
+from lc_window import LCCell, LCWin
+from lc_screen import lc
+
+
+def line_hash(cells: list[LCCell]) -> int:
+    h = 2166136261
+    for cell in cells:
+        b = cell.ch.encode('utf-8', 'replace')[:1]
+        chv = b[0] if b else ord(' ')
+        h ^= chv
+        h = (h * 16777619) & 0xFFFFFFFF
+        h ^= cell.attr & 0xFF
+        h = (h * 16777619) & 0xFFFFFFFF
+    return h
+
+
+def lc_refresh() -> int:
+    return lc_wrefresh(lc.stdscr)
+
+
+def lc_wrefresh(win: Optional[LCWin]) -> int:
+    if win is None:
+        return -1
+
+    if len(lc.screen) != lc.lines or (lc.lines > 0 and len(lc.screen[0]) != lc.cols):
+        lc.screen = [[LCCell(' ', LC_ATTR_NONE) for _x in range(lc.cols)] for _y in range(lc.lines)]
+        lc.hashes = [0 for _ in range(lc.lines)]
+        lc.term.clear_screen()
+        lc.cur_y = 0
+        lc.cur_x = 0
+        lc.cur_attr = LC_ATTR_NONE
+
+    for y in range(win.maxy):
+        abs_y = win.begy + y
+        if abs_y >= lc.lines:
+            continue
+
+        ln = win.lines[y]
+        h = line_hash(ln.line)
+        if h == lc.hashes[abs_y]:
+            continue
+        lc.hashes[abs_y] = h
+
+        for x in range(win.maxx):
+            abs_x = win.begx + x
+            if abs_x >= lc.cols:
+                continue
+
+            cell = ln.line[x]
+            scr = lc.screen[abs_y][abs_x]
+            if scr.ch == cell.ch and scr.attr == cell.attr:
+                continue
+
+            if lc.cur_y != abs_y or lc.cur_x != abs_x:
+                lc.term.move(abs_y, abs_x)
+                lc.cur_y = abs_y
+                lc.cur_x = abs_x
+
+            if lc.cur_attr != cell.attr:
+                lc.term.set_attr(cell.attr)
+                lc.cur_attr = cell.attr
+
+            os.write(sys.stdout.fileno(), cell.ch.encode('utf-8', 'replace')[:1])
+            lc.screen[abs_y][abs_x] = LCCell(cell.ch, cell.attr)
+            lc.cur_x += 1
+
+    final_y = win.begy + win.cury
+    final_x = win.begx + win.curx
+    if final_y < lc.lines and final_x < lc.cols:
+        lc.term.move(final_y, final_x)
+        lc.cur_y = final_y
+        lc.cur_x = final_x
+
+    lc.term.set_attr(LC_ATTR_NONE)
+    lc.cur_attr = LC_ATTR_NONE
+    return 0
