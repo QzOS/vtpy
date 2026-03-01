@@ -11,6 +11,7 @@ vtpy is a Python terminal library built around a simple idea:
 - input decoding is explicit and protocol-aware
 - platform-specific terminal control belongs in backends
 - higher-level semantics belong in OS-neutral core code
+- reference design for a future OS-native text ui runtime
 
 This is not a wrapper around curses.
 This is not trying to pretend ncurses history never happened either.
