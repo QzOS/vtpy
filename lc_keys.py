@@ -13,6 +13,7 @@ LC_MOD_ALT = 2
 LC_MOD_CTRL = 4
 
 # Keysyms. Keep these in a private range.
+LC_KEY_RESIZE = 0x1000
 LC_KEY_UP = 0x1001
 LC_KEY_DOWN = 0x1002
 LC_KEY_RIGHT = 0x1003
@@ -297,9 +298,18 @@ class LCKeyParser:
         if out is None:
             return LC_ERR
 
+        out.type = 0
+        out.mods = 0
+        out.rune = 0
+        out.keysym = 0
+
         rc = lc_check_resize()
         if rc < 0:
             return LC_ERR
+        if rc > 0:
+            out.type = LC_KT_KEYSYM
+            out.keysym = LC_KEY_RESIZE
+            return LC_OK
 
         if lc.nodelay_on and not self.source.input_pending(0):
             return LC_ERR

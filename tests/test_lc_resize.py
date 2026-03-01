@@ -1,5 +1,6 @@
-from lc_screen import lc, lc_check_resize
+from lc_screen import lc, lc_check_resize, lc_get_size, lc_is_resize_pending
 from lc_term import LC_ATTR_NONE, LC_DIRTY, LC_FORCEPAINT
+from lc_keys import LCKey, LCKeyParser, LC_KT_KEYSYM, LC_KEY_RESIZE
 from lc_window import lc_new
 
 
@@ -106,3 +107,56 @@ def test_check_resize_ignores_invalid_size(monkeypatch):
     assert lc_check_resize() == 0
     assert lc.stdscr is win
     assert lc.resize_pending is False
+
+
+def test_resize_pending_api():
+    lc.resize_pending = False
+    assert lc_is_resize_pending() is False
+    lc.resize_pending = True
+    assert lc_is_resize_pending() is True
+
+
+def test_get_size_api():
+    lc.lines = 17
+    lc.cols = 63
+    assert lc_get_size() == (17, 63)
+
+
+def test_readkey_returns_resize_event(monkeypatch):
+    win = lc_new(2, 2, 0, 0)
+    lc.stdscr = win
+    lc.lines = 2
+    lc.cols = 2
+    lc.screen = [[None for _ in range(2)] for _ in range(2)]
+    lc.hashes = [0, 0]
+    lc.resize_pending = True
+    lc.nodelay_on = False
+
+    class FakeTerm:
+        def reset_state(self):
+            pass
+
+    class FakeInput:
+        def unread_byte(self, ch: int) -> None:
+            pass
+
+        def read_byte(self):
+            return None
+
+        def input_pending(self, timeout_ms: int) -> bool:
+            return False
+
+    lc.term = FakeTerm()
+
+    monkeypatch.setattr("lc_screen._get_winsize", lambda: (3, 4))
+
+    parser = LCKeyParser(FakeInput())
+    key = LCKey()
+    assert parser.readkey(key) == 0
+    assert key.type == LC_KT_KEYSYM
+    assert key.keysym == LC_KEY_RESIZE
+    assert key.rune == 0
+    assert key.mods == 0
+    assert lc.resize_pending is False
+    assert lc.lines == 3
+    assert lc.cols == 4

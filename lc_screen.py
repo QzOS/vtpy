@@ -16,7 +16,12 @@ from lc_window import (
     LCCell,
     LCWin,
     lc_free,
+    lc_mvwaddstr,
     lc_new,
+    lc_waddstr,
+    lc_wdraw_box,
+    lc_wdraw_hline,
+    lc_wdraw_vline,
     lc_wmove,
     lc_wput,
 )
@@ -161,6 +166,14 @@ def _mark_all_dirty(win: LCWin) -> None:
         else:
             ln.lastch = 0
         ln.flags = LC_DIRTY | LC_FORCEPAINT
+
+
+def lc_is_resize_pending() -> bool:
+    return bool(lc.resize_pending)
+
+
+def lc_get_size() -> tuple[int, int]:
+    return lc.lines, lc.cols
 
 
 def lc_check_resize() -> int:
@@ -322,6 +335,60 @@ def lc_put_attr(ch: int, attr: int) -> int:
     if lc.stdscr is None:
         return -1
     return lc_wput(lc.stdscr, ch, attr)
+
+
+def lc_center_x(width: int, text: str) -> int:
+    if width <= 0:
+        return 0
+    if text is None:
+        return 0
+    text_len = len(text)
+    if text_len >= width:
+        return 0
+    return (width - text_len) // 2
+
+
+def lc_draw_hline(y: int, x: int, width: int, ch: str = "-", attr: int = LC_ATTR_NONE) -> int:
+    if lc.stdscr is None:
+        return -1
+    return lc_wdraw_hline(lc.stdscr, y, x, width, ch, attr)
+
+
+def lc_draw_vline(y: int, x: int, height: int, ch: str = "|", attr: int = LC_ATTR_NONE) -> int:
+    if lc.stdscr is None:
+        return -1
+    return lc_wdraw_vline(lc.stdscr, y, x, height, ch, attr)
+
+
+def lc_draw_box(
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+    attr: int = LC_ATTR_NONE,
+    hch: str = "-",
+    vch: str = "|",
+    tl: str = "+",
+    tr: str = "+",
+    bl: str = "+",
+    br: str = "+",
+) -> int:
+    if lc.stdscr is None:
+        return -1
+    return lc_wdraw_box(lc.stdscr, y, x, height, width, attr, hch, vch, tl, tr, bl, br)
+
+
+def lc_addstr_at(y: int, x: int, s: str) -> int:
+    if lc.stdscr is None:
+        return -1
+    return lc_mvwaddstr(lc.stdscr, y, x, s)
+
+
+def lc_addstr_centered(y: int, s: str) -> int:
+    if lc.stdscr is None:
+        return -1
+    x = lc_center_x(lc.cols, s)
+    return lc_mvwaddstr(lc.stdscr, y, x, s)
 
 
 def lc_set_escdelay(ms: int) -> int:
