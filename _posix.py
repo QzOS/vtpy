@@ -9,10 +9,40 @@ import termios
 
 
 _resize_states = set()
+_prev_sigwinch_handler = None
+_sigwinch_installed = False
 
 
 def _mark_resize_pending(state) -> None:
     state.resize_pending = True
+
+
+def _install_sigwinch_handler() -> None:
+    global _prev_sigwinch_handler
+    global _sigwinch_installed
+
+    if _sigwinch_installed:
+        return
+
+    _prev_sigwinch_handler = signal.signal(signal.SIGWINCH, _on_sigwinch)
+    _sigwinch_installed = True
+
+
+def _uninstall_sigwinch_handler() -> None:
+    global _prev_sigwinch_handler
+    global _sigwinch_installed
+
+    if not _sigwinch_installed:
+        return
+
+    if _prev_sigwinch_handler is not None:
+        try:
+            signal.signal(signal.SIGWINCH, _prev_sigwinch_handler)
+        except (OSError, ValueError):
+            pass
+
+    _prev_sigwinch_handler = None
+    _sigwinch_installed = False
 
 
 def init(state) -> int:
@@ -29,13 +59,14 @@ def init(state) -> int:
     termios.tcsetattr(state.in_fd, termios.TCSAFLUSH, state.cur_term)
 
     state.resize_pending = False
-    state._prev_winch_handler = None
     state._last_size = get_size(state)
     state._resize_poll_fallback = False
+    state._using_sigwinch = False
 
     try:
-        state._prev_winch_handler = signal.signal(signal.SIGWINCH, _on_sigwinch)
+        _install_sigwinch_handler()
         _resize_states.add(state)
+        state._using_sigwinch = True
     except ValueError:
         # signal.signal() only works in the main thread.
         state._resize_poll_fallback = True
@@ -44,13 +75,10 @@ def init(state) -> int:
 
 
 def end(state) -> int:
-    _resize_states.discard(state)
-
-    if state._prev_winch_handler is not None:
-        try:
-            signal.signal(signal.SIGWINCH, state._prev_winch_handler)
-        except (OSError, ValueError):
-            pass
+    if getattr(state, "_using_sigwinch", False):
+        _resize_states.discard(state)
+        if not _resize_states:
+            _uninstall_sigwinch_handler()
 
     if state.orig_term is not None:
         try:
@@ -61,11 +89,11 @@ def end(state) -> int:
     state.orig_term = None
     state.cur_term = None
     state.resize_pending = False
-    state._prev_winch_handler = None
     state.in_fd = 0
     state.out_fd = 1
     state._last_size = None
     state._resize_poll_fallback = False
+    state._using_sigwinch = False
     return 0
 
 
@@ -110,6 +138,9 @@ def unread_byte(state, ch: int) -> None:
 
 
 def input_pending(state, timeout_ms: int) -> bool:
+    if state.pushback_byte is not None:
+        return True
+
     deadline = None if timeout_ms < 0 else (time.monotonic() + (timeout_ms / 1000.0))
     while True:
         try:

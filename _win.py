@@ -40,7 +40,6 @@ _FOCUS_EVENT = 0x0010
 # Control key state flags
 _RIGHT_ALT_PRESSED = 0x0001
 _LEFT_ALT_PRESSED = 0x0002
-_RIGHT_CTRL_PRESSED = 0x0004
 _LEFT_CTRL_PRESSED = 0x0008
 _SHIFT_PRESSED = 0x0010
 
@@ -48,6 +47,7 @@ _resize_lock = threading.Lock()
 _input_lock = threading.Lock()
 
 
+_RIGHT_CTRL_PRESSED = 0x0004
 _VK_BACK = 0x08
 _VK_TAB = 0x09
 _VK_RETURN = 0x0D
@@ -166,9 +166,29 @@ def _handle(std: int):
     return _kernel32.GetStdHandle(std)
 
 
+def _valid_handle(handle) -> bool:
+    return handle not in (None, _NULL_HANDLE_VALUE, _INVALID_HANDLE_VALUE)
+
+
+def _reset_state_fields(state) -> None:
+    state.orig_term = None
+    state.cur_term = None
+    state._win_hin = None
+    state._win_hout = None
+    state._last_size = (24, 80)
+    state.in_fd = 0
+    state.out_fd = 1
+
+    with _resize_lock:
+        state.resize_pending = False
+
+    with _input_lock:
+        if hasattr(state, "_input_bytes"):
+            state._input_bytes.clear()
+
+
 def init(state) -> int:
     """Initialize terminal for Windows console with VT processing."""
-
     state.in_fd = 0
     state.out_fd = 1
     state.term.out_fd = state.out_fd
@@ -182,8 +202,7 @@ def init(state) -> int:
     hin = _handle(_STD_INPUT_HANDLE)
     hout = _handle(_STD_OUTPUT_HANDLE)
     # Check for invalid handles: None, NULL, or INVALID_HANDLE_VALUE.
-    # 0 is rejected because GetStdHandle can return 0 for detached processes
-    if hin in (None, _NULL_HANDLE_VALUE, _INVALID_HANDLE_VALUE) or hout in (None, _NULL_HANDLE_VALUE, _INVALID_HANDLE_VALUE):
+    if not _valid_handle(hin) or not _valid_handle(hout):
         return -1
 
     # Save original console modes
@@ -209,6 +228,7 @@ def init(state) -> int:
     )
 
     if not _kernel32.SetConsoleMode(hout, new_out_mode):
+        _reset_state_fields(state)
         return -1
 
     # cbreak-like: disable line input and echo, enable VT input
@@ -223,12 +243,8 @@ def init(state) -> int:
             _kernel32.SetConsoleMode(hout, orig_out_mode.value)
         except (OSError, ValueError):
             pass
-        state.orig_term = None
-        state.cur_term = None
-        state._win_hin = None
-        state._win_hout = None
+        _reset_state_fields(state)
         return -1
-
 
     state.resize_pending = False
     state._last_size = get_size(state)
@@ -246,21 +262,7 @@ def end(state) -> int:
         except (OSError, ValueError):
             pass
 
-    state.orig_term = None
-    state.cur_term = None
-
-    with _resize_lock:
-        state.resize_pending = False
-
-    with _input_lock:
-        if hasattr(state, "_input_bytes"):
-            state._input_bytes.clear()
-
-    state._last_size = (24, 80)
-    state._win_hin = None
-    state._win_hout = None
-    state.in_fd = 0
-    state.out_fd = 1
+    _reset_state_fields(state)
     return 0
 
 
@@ -393,7 +395,7 @@ def _push_input_bytes(state, data: bytes) -> None:
 
 def _wait_console_input(state, timeout_ms: int) -> int:
     hin = getattr(state, "_win_hin", None)
-    if hin in (None, _NULL_HANDLE_VALUE, _INVALID_HANDLE_VALUE):
+    if not _valid_handle(hin):
         return -1
 
     timeout = _INFINITE if timeout_ms < 0 else max(0, int(timeout_ms))
@@ -405,7 +407,7 @@ def _wait_console_input(state, timeout_ms: int) -> int:
 
 def _read_console_events(state, block: bool) -> int:
     hin = getattr(state, "_win_hin", None)
-    if hin in (None, _NULL_HANDLE_VALUE, _INVALID_HANDLE_VALUE):
+    if not _valid_handle(hin):
         return -1
 
     records = (_INPUT_RECORD * 32)()
@@ -466,6 +468,12 @@ def _handle_console_record(state, rec) -> None:
         _push_input_bytes(state, data)
 
 
+def _with_alt_prefix(data: bytes, alt: bool) -> bytes:
+    if alt and data:
+        return b"\x1b" + data
+    return data
+
+
 def _translate_key_event(key) -> bytes:
     if not key.bKeyDown:
         return b""
@@ -482,26 +490,14 @@ def _translate_key_event(key) -> bytes:
     alt = bool(key.dwControlKeyState & (_LEFT_ALT_PRESSED | _RIGHT_ALT_PRESSED))
 
     if vk in _SPECIAL_KEY_BYTES:
-        data = _SPECIAL_KEY_BYTES[vk]
-        if alt:
-            data = b"\x1b" + data
-        return data * repeat
+        return _with_alt_prefix(_SPECIAL_KEY_BYTES[vk], alt) * repeat
 
     if vk == _VK_RETURN:
-        data = b"\r"
-        if alt:
-            data = b"\x1b" + data
-        return data * repeat
+        return _with_alt_prefix(b"\r", alt) * repeat
     if vk == _VK_TAB:
-        data = b"\t"
-        if alt:
-            data = b"\x1b" + data
-        return data * repeat
+        return _with_alt_prefix(b"\t", alt) * repeat
     if vk == _VK_BACK:
-        data = b"\x08"
-        if alt:
-            data = b"\x1b" + data
-        return data * repeat
+        return _with_alt_prefix(b"\x08", alt) * repeat
     if vk == _VK_ESCAPE:
         return b"\x1b" * repeat
 
@@ -538,7 +534,4 @@ def _translate_key_event(key) -> bytes:
             # Byte-oriented backend: drop non-Latin-1 code points.
             data = b""
 
-    if alt and data:
-        data = b"\x1b" + data
-
-    return data * repeat
+    return _with_alt_prefix(data, alt) * repeat
