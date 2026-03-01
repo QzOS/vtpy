@@ -348,6 +348,30 @@ def apply_term(state) -> int:
     return 0
 
 
+def raw(state) -> int:
+    return -1
+
+
+def noraw(state) -> int:
+    return -1
+
+
+def cbreak(state) -> int:
+    return -1
+
+
+def nocbreak(state) -> int:
+    return -1
+
+
+def echo(state) -> int:
+    return -1
+
+
+def noecho(state) -> int:
+    return -1
+
+
 def _peek_input_byte(state) -> bool:
     with _input_lock:
         return bool(state._input_bytes)
