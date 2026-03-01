@@ -1,14 +1,18 @@
 from lc_term import LC_ATTR_NONE
 from lc_window import (
     _box_edges,
+    _box_title_span,
     _interior_rect,
     _normalize_rect,
     fill_rect,
     lc_new,
     lc_waddstr,
     lc_wdraw_box,
+    lc_wdraw_box_title,
     lc_wdraw_hline,
+    lc_wdraw_panel,
     lc_wdraw_vline,
+    lc_wfill,
     lc_wmove,
 )
 
@@ -34,6 +38,31 @@ def test_fill_rect_clips_top_and_bottom():
     assert _row_text(win, 1) == " zz "
     assert _row_text(win, 2) == " zz "
     assert _row_text(win, 3) == " zz "
+
+
+def test_fill_rect_preserves_requested_attr():
+    win = lc_new(2, 4, 0, 0)
+    fill_rect(win, 0, 1, 2, 3, "q", 7)
+
+    assert win.lines[0].line[0].ch == " "
+    assert win.lines[0].line[1].ch == "q"
+    assert win.lines[0].line[2].ch == "q"
+    assert win.lines[1].line[1].ch == "q"
+    assert win.lines[1].line[2].ch == "q"
+
+    assert win.lines[0].line[1].attr == 7
+    assert win.lines[0].line[2].attr == 7
+    assert win.lines[1].line[1].attr == 7
+    assert win.lines[1].line[2].attr == 7
+
+
+def test_wfill_clips_and_sets_attr():
+    win = lc_new(3, 5, 0, 0)
+    assert lc_wfill(win, -1, 2, 3, 4, ".", 9) == 0
+    assert _row_text(win, 0) == "  ..."
+    assert _row_text(win, 1) == "  ..."
+    assert win.lines[0].line[2].attr == 9
+    assert win.lines[1].line[4].attr == 9
 
 
 def test_waddstr_clips_when_reaching_window_end():
@@ -159,3 +188,102 @@ def test_interior_rect_for_regular_box():
 def test_interior_rect_for_degenerate_box():
     assert _interior_rect(1, 2, 2, 5) == (2, 3, 0, 0)
     assert _interior_rect(1, 2, 5, 2) == (2, 3, 0, 0)
+
+
+def test_wfill_empty_char_is_error():
+    win = lc_new(2, 2, 0, 0)
+    assert lc_wfill(win, 0, 0, 1, 1, "", LC_ATTR_NONE) == -1
+
+
+def test_wfill_nonpositive_size_is_successful_noop():
+    win = lc_new(2, 2, 0, 0)
+    assert lc_wfill(win, 0, 0, 0, 2, "x", 1) == 0
+    assert lc_wfill(win, 0, 0, 2, 0, "x", 1) == 0
+
+
+def test_box_title_span_regular_case():
+    y, x, label = _box_title_span(1, 2, 4, 8, "abc")
+    assert y == 1
+    assert x == 3
+    assert label == " abc "
+
+
+def test_box_title_span_clips_to_inner_width():
+    y, x, label = _box_title_span(0, 0, 3, 5, "abcdef")
+    assert y == 0
+    assert x == 1
+    assert label == " ab"
+
+
+def test_wdraw_box_title_writes_on_top_edge():
+    win = lc_new(4, 10, 0, 0)
+    assert lc_wdraw_box(win, 0, 0, 4, 10) == 0
+    assert lc_wdraw_box_title(win, 0, 0, 4, 10, "hdr", 7) == 0
+
+    assert _row_text(win, 0) == "+ hdr ---+"
+    assert win.lines[0].line[1].attr == 7
+    assert win.lines[0].line[5].attr == 7
+
+
+def test_wdraw_box_title_clips_small_box():
+    win = lc_new(3, 6, 0, 0)
+    assert lc_wdraw_box(win, 0, 0, 3, 6) == 0
+    assert lc_wdraw_box_title(win, 0, 0, 3, 6, "abcdef", 3) == 0
+
+    assert _row_text(win, 0) == "+ abc+"
+
+
+def test_wdraw_box_title_outside_window_is_noop_success():
+    win = lc_new(3, 4, 0, 0)
+    assert lc_wdraw_box_title(win, 10, 10, 3, 5, "x", 1) == 0
+    for y in range(3):
+        assert _row_text(win, y) == "    "
+
+
+def test_wdraw_box_title_none_is_error():
+    win = lc_new(3, 4, 0, 0)
+    assert lc_wdraw_box_title(win, 0, 0, 3, 4, None, 1) == -1
+
+
+def test_wdraw_panel_draws_frame_title_and_fill():
+    win = lc_new(5, 12, 0, 0)
+    assert lc_wdraw_panel(win, 0, 0, 5, 12, "hdr", 7, ".", 3) == 0
+
+    assert _row_text(win, 0) == "+ hdr -----+"
+    assert _row_text(win, 1) == "|..........|"
+    assert _row_text(win, 2) == "|..........|"
+    assert _row_text(win, 3) == "|..........|"
+    assert _row_text(win, 4) == "+----------+"
+
+    assert win.lines[0].line[1].attr == 7
+    assert win.lines[1].line[1].attr == 3
+    assert win.lines[3].line[10].attr == 3
+
+
+def test_wdraw_panel_without_title_or_fill_is_just_box():
+    win = lc_new(3, 6, 0, 0)
+    assert lc_wdraw_panel(win, 0, 0, 3, 6) == 0
+
+    assert _row_text(win, 0) == "+----+"
+    assert _row_text(win, 1) == "|    |"
+    assert _row_text(win, 2) == "+----+"
+
+
+def test_wdraw_panel_fill_only_uses_interior():
+    win = lc_new(4, 7, 0, 0)
+    assert lc_wdraw_panel(win, 0, 0, 4, 7, None, 1, "x", 9) == 0
+
+    assert _row_text(win, 0) == "+-----+"
+    assert _row_text(win, 1) == "|xxxxx|"
+    assert _row_text(win, 2) == "|xxxxx|"
+    assert _row_text(win, 3) == "+-----+"
+    assert win.lines[1].line[1].attr == 9
+
+
+def test_wdraw_panel_clips_like_box():
+    win = lc_new(4, 6, 0, 0)
+    assert lc_wdraw_panel(win, 0, 3, 4, 6, "t", 2, ".", 4) == 0
+    assert _row_text(win, 0) == "   + t"
+    assert _row_text(win, 1) == "   |.."
+    assert _row_text(win, 2) == "   |.."
+    assert _row_text(win, 3) == "   +--"
