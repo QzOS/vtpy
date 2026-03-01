@@ -1,7 +1,5 @@
 # vtpy README
 
-This document is for us, not for users. The goal is to state clearly what is being built, what is intentionally not being built yet, and what contracts the code is supposed to obey.
-
 ## 1. What this library is
 
 vtpy is a Python terminal library built around a simple idea:
