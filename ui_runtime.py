@@ -155,6 +155,7 @@ def ui_runtime_dispatch(rt: Optional[UIRuntime], ev: UIEvent) -> int:
     if rt is None or rt.root is None or ev is None:
         return -1
 
+    # Keep the runtime event-driven. Layout/bind rebuild happens only on resize.
     if ev.type == UI_EVENT_NONE:
         return 0
 
