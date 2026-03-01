@@ -5,11 +5,9 @@ Requires Windows 10 1607+ (or Windows Terminal) for VT/ANSI support.
 
 import ctypes
 import ctypes.wintypes
-import msvcrt
 import os
 import threading
-import time
-from typing import Optional
+from collections import deque
 
 # ── Win32 constants ─────────────────────────────────────────────────
 _STD_INPUT_HANDLE = -10
@@ -24,11 +22,25 @@ _ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200
 _ENABLE_PROCESSED_OUTPUT = 0x0001
 _ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
 
+_WAIT_OBJECT_0 = 0x00000000
+_WAIT_TIMEOUT = 0x00000102
+_INFINITE = 0xFFFFFFFF
+
 _kernel32 = ctypes.windll.kernel32
 
 # INPUT_RECORD.EventType values
 _KEY_EVENT = 0x0001
 _WINDOW_BUFFER_SIZE_EVENT = 0x0004
+_MOUSE_EVENT = 0x0002
+_MENU_EVENT = 0x0008
+_FOCUS_EVENT = 0x0010
+
+# Control key state flags
+_RIGHT_ALT_PRESSED = 0x0001
+_LEFT_ALT_PRESSED = 0x0002
+_RIGHT_CTRL_PRESSED = 0x0004
+_LEFT_CTRL_PRESSED = 0x0008
+_SHIFT_PRESSED = 0x0010
 
 
 def _handle(std: int):
@@ -36,6 +48,36 @@ def _handle(std: int):
 
 
 _resize_lock = threading.Lock()
+_input_lock = threading.Lock()
+
+
+_VK_BACK = 0x08
+_VK_TAB = 0x09
+_VK_RETURN = 0x0D
+_VK_ESCAPE = 0x1B
+_VK_PRIOR = 0x21
+_VK_NEXT = 0x22
+_VK_END = 0x23
+_VK_HOME = 0x24
+_VK_LEFT = 0x25
+_VK_UP = 0x26
+_VK_RIGHT = 0x27
+_VK_DOWN = 0x28
+_VK_INSERT = 0x2D
+_VK_DELETE = 0x2E
+
+_SPECIAL_KEY_BYTES = {
+    _VK_UP: b"\x1b[A",
+    _VK_DOWN: b"\x1b[B",
+    _VK_RIGHT: b"\x1b[C",
+    _VK_LEFT: b"\x1b[D",
+    _VK_HOME: b"\x1b[H",
+    _VK_END: b"\x1b[F",
+    _VK_DELETE: b"\x1b[3~",
+    _VK_INSERT: b"\x1b[2~",
+    _VK_PRIOR: b"\x1b[5~",
+    _VK_NEXT: b"\x1b[6~",
+}
 
 
 class _COORD(ctypes.Structure):
@@ -51,8 +93,27 @@ class _WINDOW_BUFFER_SIZE_RECORD(ctypes.Structure):
     ]
 
 
+class _KEY_EVENT_RECORD_UNION(ctypes.Union):
+    _fields_ = [
+        ("UnicodeChar", ctypes.wintypes.WCHAR),
+        ("AsciiChar", ctypes.c_char),
+    ]
+
+
+class _KEY_EVENT_RECORD(ctypes.Structure):
+    _fields_ = [
+        ("bKeyDown", ctypes.wintypes.BOOL),
+        ("wRepeatCount", ctypes.wintypes.WORD),
+        ("wVirtualKeyCode", ctypes.wintypes.WORD),
+        ("wVirtualScanCode", ctypes.wintypes.WORD),
+        ("uChar", _KEY_EVENT_RECORD_UNION),
+        ("dwControlKeyState", ctypes.wintypes.DWORD),
+    ]
+
+
 class _INPUT_RECORD_EVENT(ctypes.Union):
     _fields_ = [
+        ("KeyEvent", _KEY_EVENT_RECORD),
         ("WindowBufferSizeEvent", _WINDOW_BUFFER_SIZE_RECORD),
         ("_padding", ctypes.c_byte * 16),
     ]
@@ -72,6 +133,12 @@ def init(state) -> int:
     state.in_fd = 0
     state.out_fd = 1
     state.term.out_fd = state.out_fd
+    state._input_bytes = deque()
+    state._last_size = (24, 80)
+
+    # These are internal-only fields owned by this backend.
+    state._win_hin = None
+    state._win_hout = None
 
     hin = _handle(_STD_INPUT_HANDLE)
     hout = _handle(_STD_OUTPUT_HANDLE)
@@ -80,7 +147,6 @@ def init(state) -> int:
     if hin in (None, 0, -1) or hout in (None, 0, -1):
         return -1
 
-    state._last_size = (24, 80)
     # Save original console modes
     orig_in_mode = ctypes.wintypes.DWORD()
     if not _kernel32.GetConsoleMode(hin, ctypes.byref(orig_in_mode)):
@@ -93,6 +159,8 @@ def init(state) -> int:
     # Store original modes in state for restoration
     state.orig_term = (orig_in_mode.value, orig_out_mode.value, hin, hout)
     state.cur_term = list(state.orig_term)
+    state._win_hin = hin
+    state._win_hout = hout
 
     # Enable VT processing on output so ANSI escapes work
     new_out_mode = (
@@ -132,7 +200,11 @@ def end(state) -> int:
     state.cur_term = None
     with _resize_lock:
         state.resize_pending = False
+    with _input_lock:
+        state._input_bytes.clear()
     state._last_size = (24, 80)
+    state._win_hin = None
+    state._win_hout = None
     state.in_fd = 0
     state.out_fd = 1
     return 0
@@ -156,21 +228,16 @@ def read_byte(state):
         state.pushback_byte = None
         return ch
 
-    _drain_resize_events(state)
-
-    # Use msvcrt for console input on Windows.
     while True:
-        try:
-            if msvcrt.kbhit():
-                ch = msvcrt.getch()
-                if len(ch) >= 1:
-                    return ch[0]
-                # Empty getch response should not happen; retry.
-            else:
-                _drain_resize_events(state)
-                # No input available; yield to other threads.
-                time.sleep(0.001)
-        except (OSError, ValueError):
+        ch = _pop_input_byte(state)
+        if ch is not None:
+            return ch
+
+        rc = _wait_console_input(state, -1)
+        if rc != _WAIT_OBJECT_0:
+            return None
+
+        if _read_console_events(state, block=True) < 0:
             return None
 
 
@@ -184,37 +251,29 @@ def input_pending(state, timeout_ms: int) -> bool:
     if state.pushback_byte is not None:
         return True
 
-    _drain_resize_events(state)
+    if _peek_input_byte(state):
+        return True
 
-    if timeout_ms < 0:
-        try:
-            while True:
-                if msvcrt.kbhit():
-                    return True
-                _drain_resize_events(state)
-                time.sleep(0.01)
-        except (OSError, ValueError):
-            return False
-    elif timeout_ms == 0:
-        try:
-            return msvcrt.kbhit()
-        except (OSError, ValueError):
-            return False
-    else:
-        deadline = time.monotonic() + (timeout_ms / 1000.0)
-        try:
-            while time.monotonic() < deadline:
-                if msvcrt.kbhit():
-                    return True
-                _drain_resize_events(state)
-                time.sleep(0.001)
-        except (OSError, ValueError):
-            return False
+    if _read_console_events(state, block=False) < 0:
         return False
+    if _peek_input_byte(state):
+        return True
+
+    rc = _wait_console_input(state, timeout_ms)
+    if rc == _WAIT_TIMEOUT:
+        return False
+    if rc != _WAIT_OBJECT_0:
+        return False
+
+    if _read_console_events(state, block=False) < 0:
+        return False
+    return _peek_input_byte(state)
 
 
 def poll_resize(state) -> bool:
     """Check if a resize event occurred."""
+    if _read_console_events(state, block=False) < 0:
+        return False
     with _resize_lock:
         return bool(state.resize_pending)
 
@@ -227,7 +286,7 @@ def clear_resize(state) -> None:
 
 def apply_term(state) -> int:
     """Apply terminal settings.
-    
+
     On Windows, terminal mode changes are applied immediately
     via SetConsoleMode, so this is effectively a no-op.
     Returns 0 to indicate success.
@@ -235,49 +294,159 @@ def apply_term(state) -> int:
     return 0
 
 
-def _drain_resize_events(state) -> None:
-    """Consume pending resize events from the console input buffer.
+def _peek_input_byte(state) -> bool:
+    with _input_lock:
+        return bool(state._input_bytes)
 
-    This is opportunistic, not asynchronous: resize is noticed only when
-    the caller enters an input path.
-    """
-    if state.orig_term is None:
+
+def _pop_input_byte(state):
+    with _input_lock:
+        if state._input_bytes:
+            return state._input_bytes.popleft()
+    return None
+
+
+def _push_input_bytes(state, data: bytes) -> None:
+    if not data:
         return
+    with _input_lock:
+        state._input_bytes.extend(data)
 
-    hin = state.orig_term[2]
+
+def _wait_console_input(state, timeout_ms: int) -> int:
+    hin = getattr(state, "_win_hin", None)
+    if hin in (None, 0, -1):
+        return -1
+
+    timeout = _INFINITE if timeout_ms < 0 else int(timeout_ms)
+    try:
+        return _kernel32.WaitForSingleObject(hin, timeout)
+    except (OSError, ValueError):
+        return -1
+
+
+def _read_console_events(state, block: bool) -> int:
+    hin = getattr(state, "_win_hin", None)
+    if hin in (None, 0, -1):
+        return -1
+
     records = (_INPUT_RECORD * 32)()
     count = ctypes.wintypes.DWORD()
 
     while True:
         try:
-            if not _kernel32.PeekConsoleInputW(hin, records, len(records), ctypes.byref(count)):
-                return
-            if count.value == 0:
-                return
-
-            consumed = 0
-            saw_resize = False
+            if block:
+                if not _kernel32.ReadConsoleInputW(hin, records, len(records), ctypes.byref(count)):
+                    return -1
+                if count.value == 0:
+                    return 0
+            else:
+                if not _kernel32.PeekConsoleInputW(hin, records, len(records), ctypes.byref(count)):
+                    return -1
+                if count.value == 0:
+                    return 0
+                if not _kernel32.ReadConsoleInputW(hin, records, count.value, ctypes.byref(count)):
+                    return -1
 
             for i in range(count.value):
-                rec = records[i]
-                if rec.EventType == _WINDOW_BUFFER_SIZE_EVENT:
-                    saw_resize = True
-                    consumed += 1
-                    continue
-                break
+                _handle_console_record(state, records[i])
 
-            if consumed == 0:
-                return
-
-            if not _kernel32.ReadConsoleInputW(hin, records, consumed, ctypes.byref(count)):
-                return
-
-            if saw_resize:
-                current_size = get_size(state)
-                if current_size[0] > 0 and current_size[1] > 0:
-                    if current_size != state._last_size:
-                        state._last_size = current_size
-                        with _resize_lock:
-                            state.resize_pending = True
+            if block and (_peek_input_byte(state) or poll_resize(state)):
+                return 1
+            if not block:
+                return 1
         except (OSError, ValueError):
-            return
+            return -1
+
+
+def _handle_console_record(state, rec) -> None:
+    if rec.EventType == _WINDOW_BUFFER_SIZE_EVENT:
+        current_size = get_size(state)
+        if current_size[0] > 0 and current_size[1] > 0:
+            if current_size != state._last_size:
+                state._last_size = current_size
+                with _resize_lock:
+                    state.resize_pending = True
+        return
+
+    if rec.EventType != _KEY_EVENT:
+        return
+
+    data = _translate_key_event(rec.KeyEvent)
+    if data:
+        _push_input_bytes(state, data)
+
+
+def _translate_key_event(key) -> bytes:
+    if not key.bKeyDown:
+        return b""
+
+    repeat = int(key.wRepeatCount)
+    if repeat <= 0:
+        repeat = 1
+
+    vk = int(key.wVirtualKeyCode)
+    ctrl = bool(key.dwControlKeyState & (_LEFT_CTRL_PRESSED | _RIGHT_CTRL_PRESSED))
+    alt = bool(key.dwControlKeyState & (_LEFT_ALT_PRESSED | _RIGHT_ALT_PRESSED))
+
+    if vk in _SPECIAL_KEY_BYTES:
+        data = _SPECIAL_KEY_BYTES[vk]
+        if alt:
+            data = b"\x1b" + data
+        return data * repeat
+
+    if vk == _VK_RETURN:
+        data = b"\r"
+        if alt:
+            data = b"\x1b" + data
+        return data * repeat
+    if vk == _VK_TAB:
+        data = b"\t"
+        if alt:
+            data = b"\x1b" + data
+        return data * repeat
+    if vk == _VK_BACK:
+        data = b"\x08"
+        if alt:
+            data = b"\x1b" + data
+        return data * repeat
+    if vk == _VK_ESCAPE:
+        return b"\x1b" * repeat
+
+    ch = key.uChar.UnicodeChar
+    if not ch:
+        return b""
+
+    code = ord(ch)
+
+    if ctrl:
+        # Ctrl+A..Ctrl+Z => 0x01..0x1A
+        if 0x40 < code < 0x5B:
+            data = bytes([code - 0x40])
+        elif 0x60 < code < 0x7B:
+            data = bytes([code - 0x60])
+        elif code == 0x20:
+            data = b"\x00"
+        elif code == 0x5B:
+            data = b"\x1b"
+        elif code == 0x5C:
+            data = b"\x1c"
+        elif code == 0x5D:
+            data = b"\x1d"
+        elif code == 0x5E:
+            data = b"\x1e"
+        elif code == 0x5F:
+            data = b"\x1f"
+        else:
+            data = b""
+    else:
+        if 0 <= code <= 0xFF:
+            data = bytes([code])
+        else:
+            # Byte-oriented backend: drop non-Latin-1 code points.
+            data = b""
+
+    if alt and data:
+        data = b"\x1b" + data
+
+    return data * repeat
