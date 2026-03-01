@@ -1,4 +1,5 @@
 from ui_view import (
+    UI_VIEW_VISIBLE,
     UIView,
     ui_view_create_root,
     ui_view_create_container,
@@ -191,3 +192,136 @@ def test_ui_draw_stops_on_draw_self_error(monkeypatch):
 
     assert ui_view_draw(root) == -1
     assert calls == ["root"]
+
+
+def test_ui_draw_skips_invisible_subtree_even_if_dirty(monkeypatch):
+    calls = []
+
+    root = ui_view_create_root("root")
+    parent = ui_view_create_container("parent", 0, 0, 3, 10)
+    child = ui_view_create_label("child", 0, 0, 1, 10, "hello")
+
+    assert ui_view_add_child(root, parent) == 0
+    assert ui_view_add_child(parent, child) == 0
+
+    _bind_tree_fake(root)
+    _clear_tree_dirty(root)
+
+    parent.flags &= ~UI_VIEW_VISIBLE
+    parent.set_dirty()
+    child.set_dirty()
+
+    def fake_draw_self(view, ctx=None):
+        calls.append(view.id)
+        return 0
+
+    monkeypatch.setattr("ui_view.ui_view_draw_self", fake_draw_self)
+
+    assert ui_view_draw(root) == 0
+    assert calls == []
+    assert parent.is_dirty()
+    assert child.is_dirty()
+
+
+def test_ui_draw_skips_invisible_child_without_bound_window(monkeypatch):
+    calls = []
+
+    root = ui_view_create_root("root")
+    child = ui_view_create_label("child", 0, 0, 1, 10, "hello")
+
+    assert ui_view_add_child(root, child) == 0
+
+    _clear_tree_dirty(root)
+    root.bound_win = _DummyWin()
+
+    child.flags &= ~UI_VIEW_VISIBLE
+    child.set_dirty()
+
+    def fake_draw_self(view, ctx=None):
+        calls.append(view.id)
+        return 0
+
+    monkeypatch.setattr("ui_view.ui_view_draw_self", fake_draw_self)
+
+    assert ui_view_draw(root) == 0
+    assert calls == []
+
+
+def test_ui_draw_requires_bound_window_for_dirty_visible_descendant(monkeypatch):
+    calls = []
+
+    root = ui_view_create_root("root")
+    parent = ui_view_create_container("parent", 0, 0, 3, 10)
+    child = ui_view_create_label("child", 0, 0, 1, 10, "hello")
+
+    assert ui_view_add_child(root, parent) == 0
+    assert ui_view_add_child(parent, child) == 0
+
+    _clear_tree_dirty(root)
+    root.bound_win = _DummyWin()
+    parent.bound_win = _DummyWin()
+    child.bound_win = None
+    child.set_dirty()
+
+    def fake_draw_self(view, ctx=None):
+        calls.append(view.id)
+        return 0
+
+    monkeypatch.setattr("ui_view.ui_view_draw_self", fake_draw_self)
+
+    assert ui_view_draw(root) == -1
+    assert calls == []
+
+
+def test_ui_draw_stops_on_dirty_descendant_draw_error(monkeypatch):
+    calls = []
+
+    root = ui_view_create_root("root")
+    left = ui_view_create_label("left", 0, 0, 1, 10, "L")
+    right = ui_view_create_label("right", 1, 0, 1, 10, "R")
+
+    assert ui_view_add_child(root, left) == 0
+    assert ui_view_add_child(root, right) == 0
+
+    _bind_tree_fake(root)
+    _clear_tree_dirty(root)
+    left.set_dirty()
+    right.set_dirty()
+
+    def fake_draw_self(view, ctx=None):
+        calls.append(view.id)
+        if view.id == "left":
+            return -1
+        return 0
+
+    monkeypatch.setattr("ui_view.ui_view_draw_self", fake_draw_self)
+
+    assert ui_view_draw(root) == -1
+    assert calls == ["left"]
+    assert left.is_dirty()
+    assert right.is_dirty()
+
+
+def test_ui_draw_clean_root_skips_invisible_dirty_descendant(monkeypatch):
+    calls = []
+
+    root = ui_view_create_root("root")
+    child = ui_view_create_label("child", 0, 0, 1, 10, "hello")
+
+    assert ui_view_add_child(root, child) == 0
+
+    _bind_tree_fake(root)
+    _clear_tree_dirty(root)
+
+    child.flags &= ~UI_VIEW_VISIBLE
+    child.set_dirty()
+
+    def fake_draw_self(view, ctx=None):
+        calls.append(view.id)
+        return 0
+
+    monkeypatch.setattr("ui_view.ui_view_draw_self", fake_draw_self)
+
+    assert ui_view_draw(root) == 0
+    assert calls == []
+    assert child.is_dirty()
