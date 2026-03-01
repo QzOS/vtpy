@@ -28,9 +28,7 @@ class LCInputSource:
                     return None
             except InterruptedError:
                 continue
-            except OSError:
-                return None
-            except ValueError:
+            except (OSError, ValueError):
                 return None
 
     def input_pending(self, timeout_ms: int) -> bool:
@@ -41,9 +39,7 @@ class LCInputSource:
                 return bool(r)
             except InterruptedError:
                 continue
-            except OSError:
-                return False
-            except ValueError:
+            except (OSError, ValueError):
                 return False
 
 
