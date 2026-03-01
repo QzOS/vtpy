@@ -152,3 +152,43 @@ def lc_waddstr(win: Optional[LCWin], s: str) -> int:
             if win.cury < win.maxy - 1:
                 win.cury += 1
     return 0
+
+
+def lc_wmove(win: Optional[LCWin], y: int, x: int) -> int:
+    if win is None:
+        return -1
+    if y < 0 or y >= win.maxy or x < 0 or x >= win.maxx:
+        return -1
+    win.cury = y
+    win.curx = x
+    return 0
+
+
+def lc_wput(win: Optional[LCWin], ch: int, attr: int = LC_ATTR_NONE) -> int:
+    if win is None:
+        return -1
+    if win.curx >= win.maxx or win.cury >= win.maxy:
+        return -1
+
+    try:
+        outch = chr(ch)
+    except (TypeError, ValueError):
+        return -1
+
+    ln = win.lines[win.cury]
+    ln.line[win.curx].ch = outch
+    ln.line[win.curx].attr = attr
+    mark_dirty(ln, win.curx, win.curx + 1, win.maxx)
+
+    win.curx += 1
+    if win.curx >= win.maxx:
+        win.curx = 0
+        if win.cury < win.maxy - 1:
+            win.cury += 1
+    return 0
+
+
+def lc_mvwaddstr(win: Optional[LCWin], y: int, x: int, s: str) -> int:
+    if lc_wmove(win, y, x) != 0:
+        return -1
+    return lc_waddstr(win, s)

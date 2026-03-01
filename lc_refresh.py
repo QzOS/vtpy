@@ -1,8 +1,14 @@
 import os
-import sys
 from typing import Optional
 
-from lc_term import LC_ATTR_NONE, LC_DIRTY, LC_FORCEPAINT
+from lc_term import (
+    LC_ATTR_NONE,
+    LC_DIRTY,
+    LC_FORCEPAINT,
+    LC_ATTR_BOLD,
+    LC_ATTR_UNDERLINE,
+    LC_ATTR_REVERSE,
+)
 from lc_window import LCCell, LCWin
 from lc_screen import lc
 
@@ -28,7 +34,7 @@ def lc_refresh() -> int:
 def lc_wrefresh(win: Optional[LCWin]) -> int:
     if win is None:
         return -1
-    out_fd = sys.stdout.fileno()
+    out_fd = lc.out_fd
 
     if len(lc.screen) != lc.lines or (lc.lines > 0 and len(lc.screen[0]) != lc.cols):
         lc.screen = [[LCCell(' ', LC_ATTR_NONE) for _x in range(lc.cols)] for _y in range(lc.lines)]
@@ -94,5 +100,4 @@ def lc_wrefresh(win: Optional[LCWin]) -> int:
 
     lc.term.set_attr(LC_ATTR_NONE)
     lc.cur_attr = LC_ATTR_NONE
-    sys.stdout.flush()
     return 0

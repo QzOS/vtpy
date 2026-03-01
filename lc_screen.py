@@ -6,8 +6,18 @@ import termios
 from contextlib import contextmanager
 from typing import Optional
 
-from lc_term import LC_ATTR_NONE, Terminal
-from lc_window import LCCell, LCWin, lc_free, lc_new, mark_dirty
+from lc_term import (
+    LC_ATTR_NONE,
+    Terminal,
+)
+from lc_window import (
+    LCCell,
+    LCWin,
+    lc_free,
+    lc_new,
+    lc_wmove,
+    lc_wput,
+)
 
 
 class LCState:
@@ -19,6 +29,9 @@ class LCState:
 
         self.orig_term = None
         self.cur_term = None
+
+        self.in_fd = 0
+        self.out_fd = 1
 
         self.escdelay_ms = 50
         self.nodelay_on = False
@@ -37,7 +50,7 @@ lc = LCState()
 
 def _get_winsize() -> tuple[int, int]:
     try:
-        buf = fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, b'\x00' * 8)
+        buf = fcntl.ioctl(lc.out_fd, termios.TIOCGWINSZ, b'\x00' * 8)
         rows, cols, _xp, _yp = struct.unpack('HHHH', buf)
         if rows > 0 and cols > 0:
             return rows, cols
@@ -47,7 +60,9 @@ def _get_winsize() -> tuple[int, int]:
 
 
 def lc_init() -> Optional[LCWin]:
-    in_fd = sys.stdin.fileno()
+    lc.in_fd = sys.stdin.fileno()
+    lc.out_fd = sys.stdout.fileno()
+    lc.term.out_fd = lc.out_fd
     rows, cols = _get_winsize()
     lc.lines = rows
     lc.cols = cols
@@ -56,14 +71,15 @@ def lc_init() -> Optional[LCWin]:
     if lc.stdscr is None:
         return None
 
-    lc.orig_term = termios.tcgetattr(in_fd)
-    lc.cur_term = termios.tcgetattr(in_fd)
+    lc.orig_term = termios.tcgetattr(lc.in_fd)
+    lc.cur_term = termios.tcgetattr(lc.in_fd)
 
     lc.cur_term[3] &= ~(termios.ICANON | termios.ECHO)
     lc.cur_term[6][termios.VMIN] = 1
     lc.cur_term[6][termios.VTIME] = 0
-    termios.tcsetattr(in_fd, termios.TCSAFLUSH, lc.cur_term)
+    termios.tcsetattr(lc.in_fd, termios.TCSAFLUSH, lc.cur_term)
 
+    lc.term.reset_state()
     lc.term.use_alternate_screen(True)
     lc_keypad(True)
     lc.term.clear_screen()
@@ -79,8 +95,6 @@ def lc_init() -> Optional[LCWin]:
 
 
 def lc_end() -> int:
-    in_fd = sys.stdin.fileno()
-
     # Emit terminal restore sequences before restoring termios.
     try:
         lc.term.set_attr(LC_ATTR_NONE)
@@ -91,9 +105,10 @@ def lc_end() -> int:
     except OSError:
         pass
 
+    lc.term.reset_state()
     if lc.orig_term is not None:
         try:
-            termios.tcsetattr(in_fd, termios.TCSAFLUSH, lc.orig_term)
+            termios.tcsetattr(lc.in_fd, termios.TCSAFLUSH, lc.orig_term)
         except OSError:
             pass
 
@@ -103,12 +118,16 @@ def lc_end() -> int:
 
     lc.screen = []
     lc.hashes = []
+    lc.pushback_byte = None
+    lc.cur_y = 0
+    lc.cur_x = 0
+    lc.cur_attr = LC_ATTR_NONE
     return 0
 
 
 def _apply_term() -> int:
     try:
-        termios.tcsetattr(sys.stdin.fileno(), termios.TCSAFLUSH, lc.cur_term)
+        termios.tcsetattr(lc.in_fd, termios.TCSAFLUSH, lc.cur_term)
         return 0
     except OSError:
         return -1
@@ -180,36 +199,13 @@ def lc_move(y: int, x: int) -> int:
         return -1
     if y < 0 or y >= lc.stdscr.maxy or x < 0 or x >= lc.stdscr.maxx:
         return -1
-    lc.stdscr.cury = y
-    lc.stdscr.curx = x
-    return 0
+    return lc_wmove(lc.stdscr, y, x)
 
 
 def lc_put(ch: int) -> int:
     if lc.stdscr is None:
         return -1
-
-    win = lc.stdscr
-    if win.curx >= win.maxx or win.cury >= win.maxy:
-        return -1
-
-    try:
-        outch = chr(ch)
-    except (TypeError, ValueError):
-        return -1
-
-    ln = win.lines[win.cury]
-    ln.line[win.curx].ch = outch
-    ln.line[win.curx].attr = LC_ATTR_NONE
-    mark_dirty(ln, win.curx, win.curx + 1, win.maxx)
-
-    win.curx += 1
-    if win.curx >= win.maxx:
-        win.curx = 0
-        if win.cury < win.maxy - 1:
-            win.cury += 1
-
-    return 0
+    return lc_wput(lc.stdscr, ch, LC_ATTR_NONE)
 
 
 def lc_addstr(s: str) -> int:
@@ -228,6 +224,12 @@ def lc_mvaddstr(y: int, x: int, s: str) -> int:
     if lc_move(y, x) != 0:
         return -1
     return lc_addstr(s)
+
+
+def lc_put_attr(ch: int, attr: int) -> int:
+    if lc.stdscr is None:
+        return -1
+    return lc_wput(lc.stdscr, ch, attr)
 
 
 def lc_set_escdelay(ms: int) -> int:

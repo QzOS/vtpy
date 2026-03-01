@@ -1,10 +1,12 @@
 import os
 
-
 LC_OK = 0
 LC_ERR = -1
 
 LC_ATTR_NONE = 0
+LC_ATTR_BOLD = 1 << 0
+LC_ATTR_UNDERLINE = 1 << 1
+LC_ATTR_REVERSE = 1 << 2
 
 LC_DIRTY = 1
 LC_FORCEPAINT = 2
@@ -19,6 +21,8 @@ class TermOps:
     show_cursor_off = "\x1b[?25l"
     alt_screen_on = "\x1b[?1049h"
     alt_screen_off = "\x1b[?1049l"
+    enable_wrap = "\x1b[?7h"
+    disable_wrap = "\x1b[?7l"
     keypad_transmit_on = "\x1b[?1h\x1b="
     keypad_transmit_off = "\x1b[?1l\x1b>"
 
@@ -27,6 +31,7 @@ class Terminal:
     def __init__(self) -> None:
         self.ops = TermOps()
         self.out_fd = 1
+        self._last_attr = None
 
     def write(self, s: str) -> None:
         os.write(self.out_fd, s.encode('utf-8', 'replace'))
@@ -48,9 +53,28 @@ class Terminal:
         self.write(self.ops.keypad_transmit_on if on else self.ops.keypad_transmit_off)
         return 0
 
+    def set_wrap(self, on: bool) -> None:
+        self.write(self.ops.enable_wrap if on else self.ops.disable_wrap)
+
     def set_attr(self, attr: int) -> None:
-        # Minimal port. Extend if you want bold/reverse/underline.
+        if attr == self._last_attr:
+            return
+
         if attr == LC_ATTR_NONE:
             self.write("\x1b[0m")
-        else:
-            self.write("\x1b[0m")
+            self._last_attr = attr
+            return
+
+        parts = ["0"]
+        if attr & LC_ATTR_BOLD:
+            parts.append("1")
+        if attr & LC_ATTR_UNDERLINE:
+            parts.append("4")
+        if attr & LC_ATTR_REVERSE:
+            parts.append("7")
+
+        self.write("\x1b[" + ";".join(parts) + "m")
+        self._last_attr = attr
+
+    def reset_state(self) -> None:
+        self._last_attr = None
