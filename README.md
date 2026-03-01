@@ -471,3 +471,49 @@ We are not yet building:
 - full window hierarchy semantics
 
 That is the current truth.
+
+## 14. UI runtime skeleton
+
+The project now also has a minimal UI runtime skeleton:
+
+- `ui_event.py`
+- `ui_view.py`
+- `ui_layout.py`
+- `ui_runtime.py`
+
+This is not a widget toolkit yet.
+It is an architectural layer that establishes where future UI behavior belongs.
+
+### 14.1 Intended responsibility split
+
+- `lc_*` modules remain the terminal/core/runtime substrate
+- `ui_event.py` translates runtime input into UI-facing events and commands
+- `ui_view.py` defines logical view identity and tree semantics
+- `ui_layout.py` owns logical rect/layout policy
+- `ui_runtime.py` coordinates focus, dispatch, rebinding and redraw passes
+
+### 14.2 Important design rule
+
+A future logical UI view must not be identified by a concrete `LCWin`.
+
+Instead:
+
+- a `UIView` is the stable logical node
+- a bound `LCWin` is a runtime drawing resource
+- that binding may be rebuilt after resize or layout changes
+
+This keeps the future UI layer compatible with resize-driven subwindow invalidation.
+
+### 14.3 Root binding rule
+
+The root `UIView` binds directly to `stdscr`.
+
+It is not treated as a synthetic panel and is not bound through a fake
+panel-content subwindow. This keeps the model honest:
+
+- root layout is a logical UI concern
+- root binding is a runtime concern
+- panel/content semantics belong only to views that actually choose panel-like
+  layout or framing
+
+This is the baseline for future frame/content zoning and widget composition.
