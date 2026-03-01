@@ -107,6 +107,31 @@ def _copy_term_attrs(attrs):
     return copied
 
 
+def _sync_resize_state(state) -> bool:
+    """Refresh resize_pending against the current terminal size.
+
+    Returns True if a real size change is currently pending, else False.
+    """
+    try:
+        current_size = get_size(state)
+        last_size = getattr(state, "_last_size", None)
+
+        if last_size is None:
+            state._last_size = current_size
+            state.resize_pending = False
+            return False
+
+        if current_size != last_size:
+            state._last_size = current_size
+            state.resize_pending = True
+            return True
+
+        state.resize_pending = False
+        return False
+    except (OSError, ValueError):
+        return bool(getattr(state, "resize_pending", False))
+
+
 def _is_tty_fd(fd: int) -> bool:
     try:
         return os.isatty(fd)
@@ -235,6 +260,9 @@ def input_pending(state, timeout_ms: int) -> bool:
     if state.pushback_byte is not None:
         return True
 
+    if getattr(state, "resize_pending", False) and _sync_resize_state(state):
+        return False
+
     deadline = None if timeout_ms < 0 else (time.monotonic() + (timeout_ms / 1000.0))
     while True:
         try:
@@ -246,24 +274,28 @@ def input_pending(state, timeout_ms: int) -> bool:
                     return False
             r, _w, _e = select.select([state.in_fd], [], [], timeout)
             return bool(r)
+
         except InterruptedError:
+            # A signal (typically SIGWINCH) interrupted select(). If that
+            # signal corresponds to a real size change, let the caller observe
+            # it via poll_resize() instead of immediately re-entering select().
+            if getattr(state, "resize_pending", False) and _sync_resize_state(state):
+                return False
             continue
+
         except (OSError, ValueError):
             return False
 
 
 def poll_resize(state) -> bool:
     if getattr(state, "_resize_poll_fallback", False):
-        try:
-            current_size = get_size(state)
-            last_size = getattr(state, "_last_size", None)
-            if last_size is None:
-                state._last_size = current_size
-            elif current_size != last_size:
-                state._last_size = current_size
-                state.resize_pending = True
-        except (OSError, ValueError):
-            pass
+        return _sync_resize_state(state)
+
+    if getattr(state, "resize_pending", False):
+        # Confirm that SIGWINCH corresponds to an actual size change and clear
+        # stale/spurious notifications.
+        return _sync_resize_state(state)
+
     return bool(state.resize_pending)
 
 
