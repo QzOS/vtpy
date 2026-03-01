@@ -199,8 +199,18 @@ def _set_console_mode(handle, mode: int) -> bool:
 def _update_input_mode(state, clear_mask: int = 0, set_mask: int = 0) -> int:
     if state.cur_term is None:
         return -1
-    state.cur_term[0] = _normalize_input_mode((int(state.cur_term[0]) & ~clear_mask) | set_mask)
-    return apply_term(state)
+
+    prev_cur_term = list(state.cur_term)
+    new_in_mode = (int(prev_cur_term[0]) & ~clear_mask) | set_mask
+
+    state.cur_term[0] = new_in_mode
+
+    rc = apply_term(state)
+    if rc < 0:
+        state.cur_term = prev_cur_term
+        return -1
+
+    return 0
 
 
 def _reset_state_fields(state) -> None:
@@ -405,16 +415,36 @@ def apply_term(state) -> int:
     if not _valid_handle(hin) or not _valid_handle(hout):
         return -1
 
-    in_mode = _normalize_input_mode(int(cur_term[0]))
-    out_mode = int(cur_term[1])
-
-    if not _set_console_mode(hout, out_mode):
-        return -1
-    if not _set_console_mode(hin, in_mode):
+    try:
+        desired_in_mode = int(cur_term[0])
+        desired_out_mode = int(cur_term[1])
+    except (TypeError, ValueError):
         return -1
 
-    state.cur_term[0] = in_mode
-    state.cur_term[1] = out_mode
+    new_in_mode = _normalize_input_mode(desired_in_mode)
+    new_out_mode = desired_out_mode
+
+    rollback_out_mode = desired_out_mode
+
+    orig_term = getattr(state, "orig_term", None)
+    if orig_term is not None and len(orig_term) >= 2:
+        try:
+            rollback_out_mode = int(orig_term[1])
+        except (TypeError, ValueError):
+            rollback_out_mode = desired_out_mode
+
+    if not _set_console_mode(hout, new_out_mode):
+        return -1
+
+    if not _set_console_mode(hin, new_in_mode):
+        try:
+            _set_console_mode(hout, rollback_out_mode)
+        except (OSError, ValueError, TypeError):
+            pass
+        return -1
+
+    state.cur_term[0] = new_in_mode
+    state.cur_term[1] = new_out_mode
     return 0
 
 
