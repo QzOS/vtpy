@@ -7,6 +7,30 @@ from lc_screen import lc, lc_check_resize
 LC_RENDER_BATCH_BYTES = 8192
 
 
+def _hash_attr(h: int, attr: int) -> int:
+    # Hash the full integer attribute value, not just the low byte.
+    # This keeps row-hash change detection correct if the attribute
+    # model grows beyond 8 bits.
+    v = int(attr) & 0xFFFFFFFF
+    for shift in (0, 8, 16, 24):
+        h ^= (v >> shift) & 0xFF
+        h = (h * 16777619) & 0xFFFFFFFF
+    return h
+
+
+def _can_use_row_hash_shortcut(win: LCWin, abs_y: int) -> bool:
+    # The row-hash cache is keyed by physical screen row.
+    # Only use the row-hash shortcut when the window row maps to the full
+    # visible physical row domain represented by lc.hashes[abs_y].
+    if abs_y < 0 or abs_y >= lc.lines:
+        return False
+    if win.parent is not None:
+        return False
+    if win.begx != 0:
+        return False
+    return win.maxx == lc.cols
+
+
 def line_hash(cells: list[LCCell]) -> int:
     # FNV-1a over rendered cell content and attr.
     h = 2166136261
@@ -16,8 +40,7 @@ def line_hash(cells: list[LCCell]) -> int:
             h ^= b
             h = (h * 16777619) & 0xFFFFFFFF
 
-        h ^= cell.attr & 0xFF
-        h = (h * 16777619) & 0xFFFFFFFF
+        h = _hash_attr(h, cell.attr)
     return h
 
 
@@ -128,13 +151,14 @@ def lc_wrefresh(win: Optional[LCWin]) -> int:
             continue
 
         h = line_hash(ln.line)
-        if h == lc.hashes[abs_y] and not (ln.flags & LC_FORCEPAINT):
-            ln.firstch = 0
-            ln.lastch = 0
-            ln.flags = 0
-            continue
+        if _can_use_row_hash_shortcut(win, abs_y):
+            if h == lc.hashes[abs_y] and not (ln.flags & LC_FORCEPAINT):
+                ln.firstch = 0
+                ln.lastch = 0
+                ln.flags = 0
+                continue
 
-        lc.hashes[abs_y] = h
+            lc.hashes[abs_y] = h
         start_x = max(0, ln.firstch)
         end_x = min(win.maxx, ln.lastch + 1)
         run_start_x = -1
