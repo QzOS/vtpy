@@ -519,9 +519,6 @@ panel-content subwindow. This keeps the model honest:
 This is the baseline for future frame/content zoning and widget composition.
 
 ### 15. C portability
-```
-## 15. C portability direction
-
 A future C port remains a design goal, but it is not the primary constraint on the current Python codebase.
 
 The current rule is:
@@ -563,4 +560,4 @@ Even before any C port exists, we should still avoid patterns that weaken the ar
 
 The goal is not "Python written as fake C".
 The goal is "clean Python with contracts that can survive a later systems-language port".
-```
+
