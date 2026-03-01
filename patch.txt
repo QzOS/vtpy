@@ -1,0 +1,1056 @@
+reference idea ui_contract.md
+
+
+diff --git a/ui_event.py b/ui_event.py
+new file mode 100644
+index 0000000..8cb4c30
+--- /dev/null
++++ b/ui_event.py
+@@ -0,0 +1,173 @@
++from dataclasses import dataclass
++from typing import Optional
++
++from lc_keys import (
++    LCKey,
++    LC_KT_CHAR,
++    LC_KT_KEYSYM,
++    LC_KEY_RESIZE,
++)
++
++
++UI_EVENT_NONE = 0
++UI_EVENT_KEY = 1
++UI_EVENT_COMMAND = 2
++UI_EVENT_RESIZE = 3
++UI_EVENT_FOCUS_IN = 4
++UI_EVENT_FOCUS_OUT = 5
++
++
++UI_CMD_NONE = 0
++UI_CMD_QUIT = 1
++UI_CMD_REDRAW = 2
++UI_CMD_FOCUS_NEXT = 3
++UI_CMD_FOCUS_PREV = 4
++UI_CMD_ACTIVATE = 5
++
++
++@dataclass
++class UIEvent:
++    type: int = UI_EVENT_NONE
++    key: Optional[LCKey] = None
++    command: int = UI_CMD_NONE
++    width: int = 0
++    height: int = 0
++
++
++def ui_event_from_key(key: LCKey, width: int = 0, height: int = 0) -> UIEvent:
++    ev = UIEvent()
++
++    if key is None:
++        return ev
++
++    if key.type == LC_KT_KEYSYM and key.keysym == LC_KEY_RESIZE:
++        ev.type = UI_EVENT_RESIZE
++        ev.width = width
++        ev.height = height
++        return ev
++
++    ev.type = UI_EVENT_KEY
++    ev.key = key
++    return ev
++
++
++def ui_focus_in_event() -> UIEvent:
++    return UIEvent(type=UI_EVENT_FOCUS_IN)
++
++
++def ui_focus_out_event() -> UIEvent:
++    return UIEvent(type=UI_EVENT_FOCUS_OUT)
++
++
++def ui_command_event(command: int) -> UIEvent:
++    return UIEvent(type=UI_EVENT_COMMAND, command=command)
++
++
++def ui_translate_command(ev: UIEvent) -> int:
++    key = None
++
++    if ev is None:
++        return UI_CMD_NONE
++    if ev.type != UI_EVENT_KEY:
++        return UI_CMD_NONE
++
++    key = ev.key
++    if key is None:
++        return UI_CMD_NONE
++
++    if key.type == LC_KT_CHAR:
++        if key.rune in (ord('\t'), ):
++            return UI_CMD_FOCUS_NEXT
++        if key.rune in (ord('\n'), ord('\r')):
++            return UI_CMD_ACTIVATE
++        if key.rune in (ord('q'), ord('Q')):
++            return UI_CMD_QUIT
++        return UI_CMD_NONE
++
++    if key.type == LC_KT_KEYSYM:
++        return UI_CMD_NONE
++
++    return UI_CMD_NONE
+diff --git a/ui_view.py b/ui_view.py
+new file mode 100644
+index 0000000..7137d2e
+--- /dev/null
++++ b/ui_view.py
+@@ -0,0 +1,311 @@
++from dataclasses import dataclass, field
++from typing import Optional
++
++from lc_term import LC_ATTR_NONE
++from lc_window import LCWin, lc_panel_subwin, lc_wclear
++from ui_event import (
++    UI_CMD_NONE,
++    UI_CMD_REDRAW,
++    UI_EVENT_COMMAND,
++    UI_EVENT_FOCUS_IN,
++    UI_EVENT_FOCUS_OUT,
++    UIEvent,
++)
++
++
++UI_VIEW_VISIBLE = 1 << 0
++UI_VIEW_ENABLED = 1 << 1
++UI_VIEW_FOCUSABLE = 1 << 2
++UI_VIEW_DIRTY = 1 << 3
++
++
++@dataclass
++class UIRect:
++    y: int = 0
++    x: int = 0
++    height: int = 0
++    width: int = 0
++
++
++@dataclass
++class UIView:
++    id: str = ""
++    rect: UIRect = field(default_factory=UIRect)
++    parent: Optional["UIView"] = None
++    children: list["UIView"] = field(default_factory=list)
++    flags: int = UI_VIEW_VISIBLE | UI_VIEW_ENABLED | UI_VIEW_DIRTY
++    title: str = ""
++    attr: int = LC_ATTR_NONE
++    has_focus: bool = False
++    bound_win: Optional[LCWin] = None
++    user_data: object = None
++
++    def is_visible(self) -> bool:
++        return bool(self.flags & UI_VIEW_VISIBLE)
++
++    def is_enabled(self) -> bool:
++        return bool(self.flags & UI_VIEW_ENABLED)
++
++    def is_focusable(self) -> bool:
++        return bool(self.flags & UI_VIEW_FOCUSABLE)
++
++    def is_dirty(self) -> bool:
++        return bool(self.flags & UI_VIEW_DIRTY)
++
++    def set_dirty(self) -> None:
++        self.flags |= UI_VIEW_DIRTY
++
++    def clear_dirty(self) -> None:
++        self.flags &= ~UI_VIEW_DIRTY
++
++
++def ui_view_create(
++    view_id: str,
++    y: int,
++    x: int,
++    height: int,
++    width: int,
++    focusable: bool = False,
++) -> UIView:
++    flags = UI_VIEW_VISIBLE | UI_VIEW_ENABLED | UI_VIEW_DIRTY
++    if focusable:
++        flags |= UI_VIEW_FOCUSABLE
++
++    return UIView(
++        id=view_id,
++        rect=UIRect(y=y, x=x, height=height, width=width),
++        flags=flags,
++    )
++
++
++def ui_view_add_child(parent: Optional[UIView], child: Optional[UIView]) -> int:
++    if parent is None or child is None:
++        return -1
++    if child.parent is not None:
++        return -1
++
++    child.parent = parent
++    parent.children.append(child)
++    parent.set_dirty()
++    return 0
++
++
++def ui_view_remove_child(parent: Optional[UIView], child: Optional[UIView]) -> int:
++    if parent is None or child is None:
++        return -1
++    if child.parent is not parent:
++        return -1
++    if child not in parent.children:
++        return -1
++
++    parent.children.remove(child)
++    child.parent = None
++    child.set_dirty()
++    parent.set_dirty()
++    return 0
++
++
++def ui_view_mark_dirty(view: Optional[UIView]) -> None:
++    cur = view
++    while cur is not None:
++        cur.set_dirty()
++        cur = cur.parent
++
++
++def ui_view_bind_panel_window(
++    parent_win: Optional[LCWin],
++    view: Optional[UIView],
++) -> Optional[LCWin]:
++    if parent_win is None or view is None:
++        return None
++
++    r = view.rect
++    return lc_panel_subwin(parent_win, r.y, r.x, r.height, r.width)
++
++
++def ui_view_unbind(view: Optional[UIView]) -> None:
++    if view is None:
++        return
++    view.bound_win = None
++    for child in view.children:
++        ui_view_unbind(child)
++
++
++def ui_view_rebind_tree(
++    view: Optional[UIView],
++    parent_win: Optional[LCWin],
++) -> int:
++    child = None
++
++    if view is None:
++        return -1
++
++    if view.parent is None:
++        view.bound_win = parent_win
++    else:
++        view.bound_win = ui_view_bind_panel_window(parent_win, view)
++
++    for child in view.children:
++        if ui_view_rebind_tree(child, view.bound_win) != 0:
++            return -1
++
++    return 0
++
++
++def ui_view_find_by_id(view: Optional[UIView], view_id: str) -> Optional[UIView]:
++    child = None
++    found = None
++
++    if view is None:
++        return None
++    if view.id == view_id:
++        return view
++
++    for child in view.children:
++        found = ui_view_find_by_id(child, view_id)
++        if found is not None:
++            return found
++    return None
++
++
++def ui_view_collect_focusable(view: Optional[UIView], out: list[UIView]) -> None:
++    child = None
++
++    if view is None:
++        return
++    if not view.is_visible() or not view.is_enabled():
++        return
++    if view.is_focusable():
++        out.append(view)
++    for child in view.children:
++        ui_view_collect_focusable(child, out)
++
++
++def ui_view_handle_event(view: Optional[UIView], ev: UIEvent) -> int:
++    if view is None or ev is None:
++        return UI_CMD_NONE
++    if not view.is_visible() or not view.is_enabled():
++        return UI_CMD_NONE
++
++    if ev.type == UI_EVENT_FOCUS_IN:
++        view.has_focus = True
++        ui_view_mark_dirty(view)
++        return UI_CMD_REDRAW
++
++    if ev.type == UI_EVENT_FOCUS_OUT:
++        view.has_focus = False
++        ui_view_mark_dirty(view)
++        return UI_CMD_REDRAW
++
++    if ev.type == UI_EVENT_COMMAND:
++        return ev.command
++
++    return UI_CMD_NONE
++
++
++def ui_view_draw(view: Optional[UIView]) -> int:
++    child = None
++
++    if view is None:
++        return -1
++    if not view.is_visible():
++        return 0
++    if view.bound_win is None:
++        return -1
++
++    # Minimal skeleton rule:
++    # each view owns the full content region of its bound panel-content subwindow.
++    lc_wclear(view.bound_win)
++    view.clear_dirty()
++
++    for child in view.children:
++        if ui_view_draw(child) != 0:
++            return -1
++    return 0
+diff --git a/ui_runtime.py b/ui_runtime.py
+new file mode 100644
+index 0000000..765e81e
+--- /dev/null
++++ b/ui_runtime.py
+@@ -0,0 +1,295 @@
++from dataclasses import dataclass
++from typing import Optional
++
++from lc_keys import LCKey, lc_readkey
++from lc_refresh import lc_refresh
++from lc_screen import lc_get_size, lc_panel_content_subwindow
++from ui_event import (
++    UI_CMD_NONE,
++    UI_CMD_QUIT,
++    UI_CMD_REDRAW,
++    UI_CMD_FOCUS_NEXT,
++    UI_CMD_FOCUS_PREV,
++    UIEvent,
++    ui_command_event,
++    ui_event_from_key,
++    ui_focus_in_event,
++    ui_focus_out_event,
++    ui_translate_command,
++)
++from ui_view import (
++    UIView,
++    ui_view_collect_focusable,
++    ui_view_draw,
++    ui_view_handle_event,
++    ui_view_mark_dirty,
++    ui_view_rebind_tree,
++)
++
++
++@dataclass
++class UIRuntime:
++    root: Optional[UIView] = None
++    focused: Optional[UIView] = None
++    running: bool = False
++    last_width: int = 0
++    last_height: int = 0
++
++
++def ui_runtime_create(root: Optional[UIView]) -> Optional[UIRuntime]:
++    rt = None
++    rows = 0
++    cols = 0
++
++    if root is None:
++        return None
++
++    rows, cols = lc_get_size()
++    rt = UIRuntime(root=root, focused=None, running=False,
++                   last_width=cols, last_height=rows)
++    return rt
++
++
++def ui_runtime_bind_root(rt: Optional[UIRuntime]) -> int:
++    content = None
++    rows = 0
++    cols = 0
++    root = None
++
++    if rt is None or rt.root is None:
++        return -1
++
++    root = rt.root
++    rows, cols = lc_get_size()
++    rt.last_width = cols
++    rt.last_height = rows
++
++    # Root view binds to the stdscr content region via a panel-content subwindow
++    # convention only if the application itself has already drawn a panel.
++    # For the minimal runtime skeleton, root content is the full stdscr content
++    # area represented by a panel-like interior of the whole screen.
++    #
++    # Since stdscr itself is not a panel, we bind the root directly by rebinding
++    # the tree with a synthetic parent content window that spans the full screen.
++    content = lc_panel_content_subwindow(0, 0, rows, cols)
++    if content is None:
++        return -1
++
++    return ui_view_rebind_tree(root, content)
++
++
++def ui_runtime_set_focus(rt: Optional[UIRuntime], view: Optional[UIView]) -> int:
++    old = None
++
++    if rt is None:
++        return -1
++    if view is not None and not view.is_focusable():
++        return -1
++
++    old = rt.focused
++    if old is view:
++        return 0
++
++    if old is not None:
++        ui_view_handle_event(old, ui_focus_out_event())
++
++    rt.focused = view
++
++    if rt.focused is not None:
++        ui_view_handle_event(rt.focused, ui_focus_in_event())
++
++    return 0
++
++
++def ui_runtime_focus_first(rt: Optional[UIRuntime]) -> int:
++    focusable: list[UIView] = []
++
++    if rt is None or rt.root is None:
++        return -1
++
++    ui_view_collect_focusable(rt.root, focusable)
++    if not focusable:
++        rt.focused = None
++        return 0
++
++    return ui_runtime_set_focus(rt, focusable[0])
++
++
++def ui_runtime_focus_cycle(rt: Optional[UIRuntime], step: int) -> int:
++    focusable: list[UIView] = []
++    i = 0
++    n = 0
++
++    if rt is None or rt.root is None:
++        return -1
++
++    ui_view_collect_focusable(rt.root, focusable)
++    n = len(focusable)
++    if n == 0:
++        rt.focused = None
++        return 0
++
++    if rt.focused not in focusable:
++        return ui_runtime_set_focus(rt, focusable[0])
++
++    i = focusable.index(rt.focused)
++    i = (i + step) % n
++    return ui_runtime_set_focus(rt, focusable[i])
++
++
++def ui_runtime_dispatch(rt: Optional[UIRuntime], ev: UIEvent) -> int:
++    cmd = UI_CMD_NONE
++    target = None
++
++    if rt is None or rt.root is None or ev is None:
++        return -1
++
++    if ev.type == 0:
++        return 0
++
++    if ev.type == 3:
++        if ui_runtime_bind_root(rt) != 0:
++            return -1
++        ui_view_mark_dirty(rt.root)
++        return UI_CMD_REDRAW
++
++    cmd = ui_translate_command(ev)
++    if cmd != UI_CMD_NONE:
++        ev = ui_command_event(cmd)
++
++    if ev.type == UI_EVENT_COMMAND:
++        if ev.command == UI_CMD_FOCUS_NEXT:
++            return ui_runtime_focus_cycle(rt, 1)
++        if ev.command == UI_CMD_FOCUS_PREV:
++            return ui_runtime_focus_cycle(rt, -1)
++        if ev.command == UI_CMD_QUIT:
++            rt.running = False
++            return UI_CMD_QUIT
++
++    target = rt.focused if rt.focused is not None else rt.root
++    cmd = ui_view_handle_event(target, ev)
++    if cmd == UI_CMD_REDRAW:
++        ui_view_mark_dirty(target)
++    return cmd
++
++
++def ui_runtime_redraw(rt: Optional[UIRuntime]) -> int:
++    if rt is None or rt.root is None:
++        return -1
++    if ui_view_draw(rt.root) != 0:
++        return -1
++    return lc_refresh()
++
++
++def ui_runtime_step(rt: Optional[UIRuntime]) -> int:
++    key = LCKey()
++    ev = None
++    rows = 0
++    cols = 0
++    rc = 0
++
++    if rt is None:
++        return -1
++
++    rc = lc_readkey(key)
++    if rc != 0:
++        return -1
++
++    rows, cols = lc_get_size()
++    ev = ui_event_from_key(key, width=cols, height=rows)
++
++    rc = ui_runtime_dispatch(rt, ev)
++    if rc < 0:
++        return -1
++    if rc == UI_CMD_QUIT:
++        return 0
++
++    return ui_runtime_redraw(rt)
++
++
++def ui_runtime_run(rt: Optional[UIRuntime]) -> int:
++    if rt is None or rt.root is None:
++        return -1
++
++    if ui_runtime_bind_root(rt) != 0:
++        return -1
++    if ui_runtime_focus_first(rt) != 0:
++        return -1
++
++    rt.running = True
++
++    if ui_runtime_redraw(rt) != 0:
++        return -1
++
++    while rt.running:
++        if ui_runtime_step(rt) < 0:
++            return -1
++
++    return 0
+diff --git a/README.md b/README.md
+index e69de29..8af62dc 100644
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,31 @@
+ # vtpy README
++
++## UI runtime skeleton
++
++The project now also has a minimal UI runtime skeleton:
++
++- `ui_event.py`
++- `ui_view.py`
++- `ui_runtime.py`
++
++This is not a widget toolkit yet.
++It is an architectural layer that establishes where future UI behavior belongs.
++
++### Intended responsibility split
++
++- `lc_*` modules remain the terminal/core/runtime substrate
++- `ui_event.py` translates runtime input into UI-facing events and commands
++- `ui_view.py` defines logical view identity and tree semantics
++- `ui_runtime.py` coordinates focus, dispatch, rebinding and redraw passes
++
++### Important design rule
++
++A future logical UI view must not be identified by a concrete `LCWin`.
++
++Instead:
++
++- a `UIView` is the stable logical node
++- a bound `LCWin` is a runtime drawing resource
++- that binding may be rebuilt after resize or layout changes
++
++This keeps the future UI layer compatible with resize-driven subwindow invalidation.
+
+
+diff --git a/ui_event.py b/ui_event.py
+index 8cb4c30..8cb4c30 100644
+--- a/ui_event.py
++++ b/ui_event.py
+@@ -1,3 +1,4 @@
++# Minimal UI event layer.
+ from dataclasses import dataclass
+ from typing import Optional
+ 
+diff --git a/ui_layout.py b/ui_layout.py
+new file mode 100644
+index 0000000..6bf0a0f
+--- /dev/null
++++ b/ui_layout.py
+@@ -0,0 +1,135 @@
++from dataclasses import dataclass
++from typing import Optional
++
++
++@dataclass
++class UIRect:
++    y: int = 0
++    x: int = 0
++    height: int = 0
++    width: int = 0
++
++
++def ui_rect(y: int, x: int, height: int, width: int) -> UIRect:
++    return UIRect(y=y, x=x, height=height, width=width)
++
++
++def ui_rect_empty() -> UIRect:
++    return UIRect()
++
++
++def ui_rect_normalize(y: int, x: int, height: int, width: int) -> UIRect:
++    if height <= 0 or width <= 0:
++        return UIRect(y=y, x=x, height=0, width=0)
++    return UIRect(y=y, x=x, height=height, width=width)
++
++
++def ui_rect_inset(rect: UIRect, top: int, left: int, bottom: int, right: int) -> UIRect:
++    if rect is None:
++        return ui_rect_empty()
++
++    y = rect.y + top
++    x = rect.x + left
++    height = rect.height - top - bottom
++    width = rect.width - left - right
++    return ui_rect_normalize(y, x, height, width)
++
++
++def ui_rect_panel_content(rect: UIRect) -> UIRect:
++    if rect is None:
++        return ui_rect_empty()
++    return ui_rect_inset(rect, 1, 1, 1, 1)
++
++
++def ui_rect_split_vertical(rect: UIRect, top_height: int) -> tuple[UIRect, UIRect]:
++    if rect is None:
++        return ui_rect_empty(), ui_rect_empty()
++
++    if top_height <= 0:
++        return ui_rect_empty(), ui_rect(rect.y, rect.x, rect.height, rect.width)
++    if top_height >= rect.height:
++        return ui_rect(rect.y, rect.x, rect.height, rect.width), ui_rect_empty()
++
++    top = ui_rect(rect.y, rect.x, top_height, rect.width)
++    bottom = ui_rect(rect.y + top_height, rect.x, rect.height - top_height, rect.width)
++    return top, bottom
++
++
++def ui_rect_split_horizontal(rect: UIRect, left_width: int) -> tuple[UIRect, UIRect]:
++    if rect is None:
++        return ui_rect_empty(), ui_rect_empty()
++
++    if left_width <= 0:
++        return ui_rect_empty(), ui_rect(rect.y, rect.x, rect.height, rect.width)
++    if left_width >= rect.width:
++        return ui_rect(rect.y, rect.x, rect.height, rect.width), ui_rect_empty()
++
++    left = ui_rect(rect.y, rect.x, rect.height, left_width)
++    right = ui_rect(rect.y, rect.x + left_width, rect.height, rect.width - left_width)
++    return left, right
++
++
++def ui_layout_assign_root(view, height: int, width: int) -> int:
++    if view is None:
++        return -1
++
++    frame = ui_rect(0, 0, height, width)
++    view.frame_rect = frame
++    view.content_rect = frame
++    return 0
++
++
++def ui_layout_assign_panel(view, rect: UIRect) -> int:
++    if view is None or rect is None:
++        return -1
++
++    view.frame_rect = ui_rect(rect.y, rect.x, rect.height, rect.width)
++    view.content_rect = ui_rect_panel_content(view.frame_rect)
++    return 0
++
++
++def ui_layout_stack_vertical(parent_rect: UIRect, views: list, gap: int = 0) -> int:
++    cur_y = 0
++    view = None
++    remaining = 0
++    count = 0
++    i = 0
++    h = 0
++
++    if parent_rect is None:
++        return -1
++    if views is None:
++        return -1
++
++    count = len(views)
++    if count == 0:
++        return 0
++
++    remaining = parent_rect.height - (gap * (count - 1))
++    if remaining < 0:
++        remaining = 0
++
++    cur_y = parent_rect.y
++
++    for i, view in enumerate(views):
++        if view is None:
++            continue
++
++        if i == count - 1:
++            h = (parent_rect.y + parent_rect.height) - cur_y
++        else:
++            h = remaining // (count - i)
++
++        if h < 0:
++            h = 0
++
++        view.frame_rect = ui_rect(cur_y, parent_rect.x, h, parent_rect.width)
++        view.content_rect = ui_rect(cur_y, parent_rect.x, h, parent_rect.width)
++
++        cur_y += h + gap
++        remaining -= h
++
++    return 0
+diff --git a/ui_view.py b/ui_view.py
+index 7137d2e..3089558 100644
+--- a/ui_view.py
++++ b/ui_view.py
+@@ -1,20 +1,15 @@
+ from dataclasses import dataclass, field
+ from typing import Optional
+ 
+ from lc_term import LC_ATTR_NONE
+-from lc_window import LCWin, lc_panel_subwin, lc_wclear
++from lc_window import LCWin, lc_subwin, lc_wclear
++from ui_layout import UIRect, ui_rect, ui_rect_empty
+ from ui_event import (
+     UI_CMD_NONE,
+     UI_CMD_REDRAW,
+     UI_EVENT_COMMAND,
+     UI_EVENT_FOCUS_IN,
+     UI_EVENT_FOCUS_OUT,
+     UIEvent,
+ )
+-
+-
+-UI_VIEW_VISIBLE = 1 << 0
+-UI_VIEW_ENABLED = 1 << 1
+-UI_VIEW_FOCUSABLE = 1 << 2
+-UI_VIEW_DIRTY = 1 << 3
+-
+-
+-@dataclass
+-class UIRect:
+-    y: int = 0
+-    x: int = 0
+-    height: int = 0
+-    width: int = 0
++
++UI_VIEW_VISIBLE = 1 << 0
++UI_VIEW_ENABLED = 1 << 1
++UI_VIEW_FOCUSABLE = 1 << 2
++UI_VIEW_DIRTY = 1 << 3
++UI_VIEW_PANEL = 1 << 4
+ 
+ 
+ @dataclass
+ class UIView:
+     id: str = ""
+-    rect: UIRect = field(default_factory=UIRect)
++    frame_rect: UIRect = field(default_factory=ui_rect_empty)
++    content_rect: UIRect = field(default_factory=ui_rect_empty)
+     parent: Optional["UIView"] = None
+     children: list["UIView"] = field(default_factory=list)
+     flags: int = UI_VIEW_VISIBLE | UI_VIEW_ENABLED | UI_VIEW_DIRTY
+@@ -28,6 +23,9 @@ class UIView:
+     def is_visible(self) -> bool:
+         return bool(self.flags & UI_VIEW_VISIBLE)
+ 
++    def is_panel(self) -> bool:
++        return bool(self.flags & UI_VIEW_PANEL)
++
+     def is_enabled(self) -> bool:
+         return bool(self.flags & UI_VIEW_ENABLED)
+ 
+@@ -46,16 +44,19 @@ class UIView:
+ def ui_view_create(
+     view_id: str,
+     y: int,
+     x: int,
+     height: int,
+     width: int,
+     focusable: bool = False,
++    panel: bool = False,
+ ) -> UIView:
+     flags = UI_VIEW_VISIBLE | UI_VIEW_ENABLED | UI_VIEW_DIRTY
+     if focusable:
+         flags |= UI_VIEW_FOCUSABLE
++    if panel:
++        flags |= UI_VIEW_PANEL
+ 
+     return UIView(
+         id=view_id,
+-        rect=UIRect(y=y, x=x, height=height, width=width),
++        frame_rect=ui_rect(y, x, height, width),
++        content_rect=ui_rect(y, x, height, width),
+         flags=flags,
+     )
+@@ -81,18 +82,45 @@ def ui_view_mark_dirty(view: Optional[UIView]) -> None:
+         cur.set_dirty()
+         cur = cur.parent
+ 
+ 
+-def ui_view_bind_panel_window(
++def ui_view_bind_window(
+     parent_win: Optional[LCWin],
+     view: Optional[UIView],
+ ) -> Optional[LCWin]:
++    r = None
++
+     if parent_win is None or view is None:
+         return None
+ 
+-    r = view.rect
+-    return lc_panel_subwin(parent_win, r.y, r.x, r.height, r.width)
++    r = view.content_rect
++    if r.height <= 0 or r.width <= 0:
++        return None
++    return lc_subwin(parent_win, r.height, r.width, r.y, r.x)
++
++
++def ui_view_bind_root_window(
++    root_win: Optional[LCWin],
++    view: Optional[UIView],
++) -> Optional[LCWin]:
++    if root_win is None or view is None:
++        return None
++
++    view.bound_win = root_win
++    return root_win
++
++
++def ui_view_bind_child_window(
++    parent_win: Optional[LCWin],
++    view: Optional[UIView],
++) -> Optional[LCWin]:
++    return ui_view_bind_window(parent_win, view)
++
++
++def ui_view_layout_default(view: Optional[UIView]) -> int:
++    child = None
++
++    if view is None:
++        return -1
++    for child in view.children:
++        child.content_rect = ui_rect(
++            child.frame_rect.y, child.frame_rect.x, child.frame_rect.height, child.frame_rect.width
++        )
++    return 0
+ 
+ 
+ def ui_view_unbind(view: Optional[UIView]) -> None:
+@@ -109,15 +137,18 @@ def ui_view_rebind_tree(
+     parent_win: Optional[LCWin],
+ ) -> int:
+     child = None
+ 
+     if view is None:
+         return -1
+ 
+     if view.parent is None:
+-        view.bound_win = parent_win
++        view.bound_win = ui_view_bind_root_window(parent_win, view)
+     else:
+-        view.bound_win = ui_view_bind_panel_window(parent_win, view)
++        view.bound_win = ui_view_bind_child_window(parent_win, view)
++
++    if view.bound_win is None:
++        return -1
+ 
+     for child in view.children:
+         if ui_view_rebind_tree(child, view.bound_win) != 0:
+             return -1
+ 
+@@ -178,14 +209,17 @@ def ui_view_draw(view: Optional[UIView]) -> int:
+     if view is None:
+         return -1
+     if not view.is_visible():
+         return 0
+     if view.bound_win is None:
+         return -1
+ 
+-    # Minimal skeleton rule:
+-    # each view owns the full content region of its bound panel-content subwindow.
++    # Minimal skeleton rule:
++    # a view owns the full content region of its bound window.
++    # Frame drawing, title drawing and richer layout zoning live above this
++    # primitive baseline.
+     lc_wclear(view.bound_win)
+     view.clear_dirty()
+ 
+     for child in view.children:
+         if ui_view_draw(child) != 0:
+             return -1
+diff --git a/ui_runtime.py b/ui_runtime.py
+index 765e81e..ebda22e 100644
+--- a/ui_runtime.py
++++ b/ui_runtime.py
+@@ -1,11 +1,12 @@
+ from dataclasses import dataclass
+ from typing import Optional
+ 
+ from lc_keys import LCKey, lc_readkey
+ from lc_refresh import lc_refresh
+-from lc_screen import lc_get_size, lc_panel_content_subwindow
++from lc_screen import lc_get_size, lc
+ from ui_event import (
+     UI_CMD_NONE,
+     UI_CMD_QUIT,
+     UI_CMD_REDRAW,
+     UI_CMD_FOCUS_NEXT,
+@@ -20,8 +21,10 @@ from ui_event import (
+ )
+ from ui_view import (
+     UIView,
+     ui_view_collect_focusable,
+     ui_view_draw,
+     ui_view_handle_event,
+     ui_view_mark_dirty,
++    ui_view_layout_default,
+     ui_view_rebind_tree,
+ )
++from ui_layout import ui_layout_assign_root
+ 
+ 
+ @dataclass
+ class UIRuntime:
+@@ -44,30 +47,28 @@ def ui_runtime_create(root: Optional[UIView]) -> Optional[UIRuntime]:
+                    last_width=cols, last_height=rows)
+     return rt
+ 
+ 
+ def ui_runtime_bind_root(rt: Optional[UIRuntime]) -> int:
+-    content = None
+     rows = 0
+     cols = 0
+     root = None
+ 
+     if rt is None or rt.root is None:
+         return -1
+ 
+     root = rt.root
+     rows, cols = lc_get_size()
+     rt.last_width = cols
+     rt.last_height = rows
+ 
+-    # Root view binds to the stdscr content region via a panel-content subwindow
+-    # convention only if the application itself has already drawn a panel.
+-    # For the minimal runtime skeleton, root content is the full stdscr content
+-    # area represented by a panel-like interior of the whole screen.
+-    #
+-    # Since stdscr itself is not a panel, we bind the root directly by rebinding
+-    # the tree with a synthetic parent content window that spans the full screen.
+-    content = lc_panel_content_subwindow(0, 0, rows, cols)
+-    if content is None:
++    if ui_layout_assign_root(root, rows, cols) != 0:
++        return -1
++    if ui_view_layout_default(root) != 0:
++        return -1
++
++    if lc.stdscr is None:
+         return -1
+ 
+-    return ui_view_rebind_tree(root, content)
++    return ui_view_rebind_tree(root, lc.stdscr)
+ 
+ 
+ def ui_runtime_set_focus(rt: Optional[UIRuntime], view: Optional[UIView]) -> int:
+@@ -134,6 +135,10 @@ def ui_runtime_dispatch(rt: Optional[UIRuntime], ev: UIEvent) -> int:
+ 
+     if ev.type == 3:
++        rows, cols = lc_get_size()
++        ui_layout_assign_root(rt.root, rows, cols)
++        ui_view_layout_default(rt.root)
+         if ui_runtime_bind_root(rt) != 0:
+             return -1
+         ui_view_mark_dirty(rt.root)
+         return UI_CMD_REDRAW
+diff --git a/README.md b/README.md
+index 8af62dc..e30ec8d 100644
+--- a/README.md
++++ b/README.md
+@@ -18,6 +18,24 @@ This is not a widget toolkit yet.
+ It is an architectural layer that establishes where future UI behavior belongs.
+ 
+ ### Intended responsibility split
+ 
+ - `lc_*` modules remain the terminal/core/runtime substrate
+ - `ui_event.py` translates runtime input into UI-facing events and commands
+ - `ui_view.py` defines logical view identity and tree semantics
++- `ui_layout.py` owns logical rect/layout policy
+ - `ui_runtime.py` coordinates focus, dispatch, rebinding and redraw passes
+ 
+ ### Important design rule
+ 
+ A future logical UI view must not be identified by a concrete `LCWin`.
+@@ -28,4 +46,18 @@ Instead:
+ - a `UIView` is the stable logical node
+ - a bound `LCWin` is a runtime drawing resource
+ - that binding may be rebuilt after resize or layout changes
+ 
+ This keeps the future UI layer compatible with resize-driven subwindow invalidation.
++
++### Root binding rule
++
++The root `UIView` binds directly to `stdscr`.
++
++It is not treated as a synthetic panel and is not bound through a fake
++panel-content subwindow. This keeps the model honest:
++
++- root layout is a logical UI concern
++- root binding is a runtime concern
++- panel/content semantics belong only to views that actually choose panel-like
++  layout or framing
++
++This is the baseline for future frame/content zoning and widget composition.
+
+
+
+
+
+
