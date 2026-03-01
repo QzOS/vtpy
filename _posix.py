@@ -160,8 +160,9 @@ def init(state) -> int:
         state.cur_term[6][termios.VTIME] = 0
         termios.tcsetattr(state.in_fd, termios.TCSANOW, state.cur_term)
     except (termios.error, OSError, ValueError):
-        state.orig_term = _copy_term_attrs(orig_term)
-        _restore_term(state, termios.TCSANOW)
+        if orig_term is not None:
+            state.orig_term = _copy_term_attrs(orig_term)
+            _restore_term(state, termios.TCSANOW)
         _reset_state_fields(state)
         return -1
 
@@ -173,8 +174,8 @@ def init(state) -> int:
 
     try:
         _install_sigwinch_handler()
-        state._using_sigwinch = True
         _resize_states.add(state)
+        state._using_sigwinch = True
     except ValueError:
         # signal.signal() only works in the main thread.
         state._resize_poll_fallback = True
