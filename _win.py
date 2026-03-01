@@ -27,6 +27,8 @@ _WAIT_TIMEOUT = 0x00000102
 _INFINITE = 0xFFFFFFFF
 
 _kernel32 = ctypes.windll.kernel32
+_INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+_NULL_HANDLE_VALUE = ctypes.c_void_p(0).value
 
 # INPUT_RECORD.EventType values
 _KEY_EVENT = 0x0001
@@ -41,11 +43,6 @@ _LEFT_ALT_PRESSED = 0x0002
 _RIGHT_CTRL_PRESSED = 0x0004
 _LEFT_CTRL_PRESSED = 0x0008
 _SHIFT_PRESSED = 0x0010
-
-
-def _handle(std: int):
-    return _kernel32.GetStdHandle(std)
-
 
 _resize_lock = threading.Lock()
 _input_lock = threading.Lock()
@@ -127,6 +124,48 @@ class _INPUT_RECORD(ctypes.Structure):
     ]
 
 
+_kernel32.GetStdHandle.argtypes = [ctypes.wintypes.DWORD]
+_kernel32.GetStdHandle.restype = ctypes.wintypes.HANDLE
+
+_kernel32.GetConsoleMode.argtypes = [
+    ctypes.wintypes.HANDLE,
+    ctypes.POINTER(ctypes.wintypes.DWORD),
+]
+_kernel32.GetConsoleMode.restype = ctypes.wintypes.BOOL
+
+_kernel32.SetConsoleMode.argtypes = [
+    ctypes.wintypes.HANDLE,
+    ctypes.wintypes.DWORD,
+]
+_kernel32.SetConsoleMode.restype = ctypes.wintypes.BOOL
+
+_kernel32.PeekConsoleInputW.argtypes = [
+    ctypes.wintypes.HANDLE,
+    ctypes.POINTER(_INPUT_RECORD),
+    ctypes.wintypes.DWORD,
+    ctypes.POINTER(ctypes.wintypes.DWORD),
+]
+_kernel32.PeekConsoleInputW.restype = ctypes.wintypes.BOOL
+
+_kernel32.ReadConsoleInputW.argtypes = [
+    ctypes.wintypes.HANDLE,
+    ctypes.POINTER(_INPUT_RECORD),
+    ctypes.wintypes.DWORD,
+    ctypes.POINTER(ctypes.wintypes.DWORD),
+]
+_kernel32.ReadConsoleInputW.restype = ctypes.wintypes.BOOL
+
+_kernel32.WaitForSingleObject.argtypes = [
+    ctypes.wintypes.HANDLE,
+    ctypes.wintypes.DWORD,
+]
+_kernel32.WaitForSingleObject.restype = ctypes.wintypes.DWORD
+
+
+def _handle(std: int):
+    return _kernel32.GetStdHandle(std)
+
+
 def init(state) -> int:
     """Initialize terminal for Windows console with VT processing."""
 
@@ -142,9 +181,9 @@ def init(state) -> int:
 
     hin = _handle(_STD_INPUT_HANDLE)
     hout = _handle(_STD_OUTPUT_HANDLE)
-    # Check for invalid handles: None, 0, or -1 (INVALID_HANDLE_VALUE)
+    # Check for invalid handles: None, NULL, or INVALID_HANDLE_VALUE.
     # 0 is rejected because GetStdHandle can return 0 for detached processes
-    if hin in (None, 0, -1) or hout in (None, 0, -1):
+    if hin in (None, _NULL_HANDLE_VALUE, _INVALID_HANDLE_VALUE) or hout in (None, _NULL_HANDLE_VALUE, _INVALID_HANDLE_VALUE):
         return -1
 
     # Save original console modes
@@ -168,6 +207,7 @@ def init(state) -> int:
         | _ENABLE_PROCESSED_OUTPUT
         | _ENABLE_VIRTUAL_TERMINAL_PROCESSING
     )
+
     if not _kernel32.SetConsoleMode(hout, new_out_mode):
         return -1
 
@@ -177,8 +217,18 @@ def init(state) -> int:
         | _ENABLE_WINDOW_INPUT
         | _ENABLE_VIRTUAL_TERMINAL_INPUT
     )
+
     if not _kernel32.SetConsoleMode(hin, new_in_mode):
+        try:
+            _kernel32.SetConsoleMode(hout, orig_out_mode.value)
+        except (OSError, ValueError):
+            pass
+        state.orig_term = None
+        state.cur_term = None
+        state._win_hin = None
+        state._win_hout = None
         return -1
+
 
     state.resize_pending = False
     state._last_size = get_size(state)
@@ -198,10 +248,14 @@ def end(state) -> int:
 
     state.orig_term = None
     state.cur_term = None
+
     with _resize_lock:
         state.resize_pending = False
+
     with _input_lock:
-        state._input_bytes.clear()
+        if hasattr(state, "_input_bytes"):
+            state._input_bytes.clear()
+
     state._last_size = (24, 80)
     state._win_hin = None
     state._win_hout = None
@@ -315,10 +369,10 @@ def _push_input_bytes(state, data: bytes) -> None:
 
 def _wait_console_input(state, timeout_ms: int) -> int:
     hin = getattr(state, "_win_hin", None)
-    if hin in (None, 0, -1):
+    if hin in (None, _NULL_HANDLE_VALUE, _INVALID_HANDLE_VALUE):
         return -1
 
-    timeout = _INFINITE if timeout_ms < 0 else int(timeout_ms)
+    timeout = _INFINITE if timeout_ms < 0 else max(0, int(timeout_ms))
     try:
         return _kernel32.WaitForSingleObject(hin, timeout)
     except (OSError, ValueError):
@@ -327,7 +381,7 @@ def _wait_console_input(state, timeout_ms: int) -> int:
 
 def _read_console_events(state, block: bool) -> int:
     hin = getattr(state, "_win_hin", None)
-    if hin in (None, 0, -1):
+    if hin in (None, _NULL_HANDLE_VALUE, _INVALID_HANDLE_VALUE):
         return -1
 
     records = (_INPUT_RECORD * 32)()
@@ -336,16 +390,23 @@ def _read_console_events(state, block: bool) -> int:
     while True:
         try:
             if block:
-                if not _kernel32.ReadConsoleInputW(hin, records, len(records), ctypes.byref(count)):
+                ok = _kernel32.ReadConsoleInputW(
+                    hin, records, len(records), ctypes.byref(count)
+                )
+                if not ok:
                     return -1
-                if count.value == 0:
-                    return 0
             else:
-                if not _kernel32.PeekConsoleInputW(hin, records, len(records), ctypes.byref(count)):
+                ok = _kernel32.PeekConsoleInputW(
+                    hin, records, len(records), ctypes.byref(count)
+                )
+                if not ok:
                     return -1
                 if count.value == 0:
                     return 0
-                if not _kernel32.ReadConsoleInputW(hin, records, count.value, ctypes.byref(count)):
+                ok = _kernel32.ReadConsoleInputW(
+                    hin, records, count.value, ctypes.byref(count)
+                )
+                if not ok:
                     return -1
 
             for i in range(count.value):
@@ -356,6 +417,7 @@ def _read_console_events(state, block: bool) -> int:
                     resize_pending = bool(state.resize_pending)
                 if _peek_input_byte(state) or resize_pending:
                     return 1
+
             if not block:
                 return 1
         except (OSError, ValueError):
@@ -382,6 +444,9 @@ def _handle_console_record(state, rec) -> None:
 
 def _translate_key_event(key) -> bytes:
     if not key.bKeyDown:
+        return b""
+
+    if int(key.wRepeatCount) == 0:
         return b""
 
     repeat = int(key.wRepeatCount)
