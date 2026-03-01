@@ -2,8 +2,16 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from lc_term import LC_ATTR_NONE
-from lc_window import LCWin, lc_subwin, lc_wclear
-from ui_layout import UIRect, ui_rect, ui_rect_empty
+from lc_window import LCWin, lc_subwin, lc_wclear, lc_wdraw_panel, lc_wfill, lc_wmove, lc_waddstr
+from ui_layout import (
+    UIRect,
+    ui_rect,
+    ui_rect_copy,
+    ui_rect_empty,
+    ui_rect_inset,
+    ui_rect_is_empty,
+    ui_layout_stack_vertical,
+)
 from ui_event import (
     UI_CMD_NONE,
     UI_CMD_REDRAW,
@@ -19,6 +27,21 @@ UI_VIEW_ENABLED = 1 << 1
 UI_VIEW_FOCUSABLE = 1 << 2
 UI_VIEW_DIRTY = 1 << 3
 UI_VIEW_PANEL = 1 << 4
+UI_VIEW_CONTAINER = 1 << 5
+
+UI_LAYOUT_NONE = 0
+UI_LAYOUT_STACK_V = 1
+
+UI_VIEWKIND_GENERIC = 0
+UI_VIEWKIND_ROOT = 1
+UI_VIEWKIND_CONTAINER = 2
+UI_VIEWKIND_PANEL = 3
+UI_VIEWKIND_LABEL = 4
+
+
+@dataclass
+class UIDrawContext:
+    is_root: bool = False
 
 
 @dataclass
@@ -33,6 +56,18 @@ class UIView:
     attr: int = LC_ATTR_NONE
     has_focus: bool = False
     bound_win: Optional[LCWin] = None
+    kind: int = UI_VIEWKIND_GENERIC
+    min_height: int = 0
+    min_width: int = 0
+    pref_height: int = 0
+    pref_width: int = 0
+    layout_kind: int = UI_LAYOUT_NONE
+    layout_gap: int = 0
+    fill_ch: str = " "
+    fill_attr: int = LC_ATTR_NONE
+    text: str = ""
+    text_attr: int = LC_ATTR_NONE
+    text_align: int = 0
     user_data: object = None
 
     def is_visible(self) -> bool:
@@ -43,6 +78,9 @@ class UIView:
 
     def is_enabled(self) -> bool:
         return bool(self.flags & UI_VIEW_ENABLED)
+
+    def is_container(self) -> bool:
+        return bool(self.flags & UI_VIEW_CONTAINER)
 
     def is_focusable(self) -> bool:
         return bool(self.flags & UI_VIEW_FOCUSABLE)
@@ -65,19 +103,121 @@ def ui_view_create(
     width: int,
     focusable: bool = False,
     panel: bool = False,
+    container: bool = False,
+    kind: int = UI_VIEWKIND_GENERIC,
 ) -> UIView:
     flags = UI_VIEW_VISIBLE | UI_VIEW_ENABLED | UI_VIEW_DIRTY
     if focusable:
         flags |= UI_VIEW_FOCUSABLE
     if panel:
         flags |= UI_VIEW_PANEL
+    if container:
+        flags |= UI_VIEW_CONTAINER
 
     return UIView(
         id=view_id,
         frame_rect=ui_rect(y, x, height, width),
         content_rect=ui_rect(y, x, height, width),
+        kind=kind,
         flags=flags,
     )
+
+
+def ui_view_create_panel(
+    view_id: str,
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+    title: str = "",
+) -> UIView:
+    view = ui_view_create(
+        view_id, y, x, height, width, panel=True, container=True, kind=UI_VIEWKIND_PANEL
+    )
+    view.title = title
+    return view
+
+
+def ui_view_create_root(view_id: str = "root") -> UIView:
+    return ui_view_create(
+        view_id,
+        0,
+        0,
+        0,
+        0,
+        container=True,
+        kind=UI_VIEWKIND_ROOT,
+    )
+
+
+def ui_view_create_container(
+    view_id: str,
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+    panel: bool = False,
+    title: str = "",
+) -> UIView:
+    kind = UI_VIEWKIND_PANEL if panel else UI_VIEWKIND_CONTAINER
+    view = ui_view_create(
+        view_id, y, x, height, width, panel=panel, container=True, kind=kind
+    )
+    view.title = title
+    return view
+
+
+def ui_view_create_label(
+    view_id: str,
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+    text: str = "",
+) -> UIView:
+    view = ui_view_create(
+        view_id,
+        y,
+        x,
+        height,
+        width,
+        focusable=False,
+        panel=False,
+        container=False,
+        kind=UI_VIEWKIND_LABEL,
+    )
+    view.text = text
+    return view
+
+
+def ui_view_set_text(view: Optional[UIView], text: str) -> int:
+    if view is None:
+        return -1
+    if text is None:
+        return -1
+    view.text = text
+    ui_view_mark_dirty(view)
+    return 0
+
+
+def ui_view_set_layout_stack_vertical(view: Optional[UIView], gap: int = 0) -> int:
+    if view is None:
+        return -1
+    view.flags |= UI_VIEW_CONTAINER
+    view.layout_kind = UI_LAYOUT_STACK_V
+    view.layout_gap = gap if gap >= 0 else 0
+    return 0
+
+
+def ui_view_set_fill(view: Optional[UIView], ch: str, attr: int = LC_ATTR_NONE) -> int:
+    if view is None:
+        return -1
+    if not ch:
+        return -1
+    view.fill_ch = ch[0]
+    view.fill_attr = attr
+    ui_view_mark_dirty(view)
+    return 0
 
 
 def ui_view_add_child(parent: Optional[UIView], child: Optional[UIView]) -> int:
@@ -147,15 +287,75 @@ def ui_view_bind_child_window(
     return ui_view_bind_window(parent_win, view)
 
 
+def ui_view_measure(view: Optional[UIView]) -> int:
+    child = None
+
+    if view is None:
+        return -1
+
+    for child in view.children:
+        if ui_view_measure(child) != 0:
+            return -1
+
+    if view.pref_height < view.min_height:
+        view.pref_height = view.min_height
+    if view.pref_width < view.min_width:
+        view.pref_width = view.min_width
+
+    return 0
+
+
+def ui_view_apply_content_rect(view: Optional[UIView]) -> int:
+    if view is None:
+        return -1
+
+    if view.is_panel():
+        view.content_rect = ui_rect_inset(view.frame_rect, 1, 1, 1, 1)
+    else:
+        view.content_rect = ui_rect_copy(view.frame_rect)
+
+    return 0
+
+
+def ui_view_layout_children(view: Optional[UIView]) -> int:
+    if view is None:
+        return -1
+
+    if not view.children:
+        return 0
+
+    if ui_rect_is_empty(view.content_rect):
+        for child in view.children:
+            child.frame_rect = ui_rect_empty()
+            child.content_rect = ui_rect_empty()
+        return 0
+
+    if view.layout_kind == UI_LAYOUT_STACK_V:
+        return ui_layout_stack_vertical(view.content_rect, view.children, view.layout_gap)
+
+    for child in view.children:
+        child.content_rect = ui_rect(
+            child.frame_rect.y, child.frame_rect.x, child.frame_rect.height, child.frame_rect.width
+        )
+
+    return 0
+
+
 def ui_view_layout_default(view: Optional[UIView]) -> int:
     child = None
 
     if view is None:
         return -1
+
+    if ui_view_apply_content_rect(view) != 0:
+        return -1
+    if ui_view_layout_children(view) != 0:
+        return -1
+
     for child in view.children:
-        child.content_rect = ui_rect(
-            child.frame_rect.y, child.frame_rect.x, child.frame_rect.height, child.frame_rect.width
-        )
+        if ui_view_layout_default(child) != 0:
+            return -1
+
     return 0
 
 
@@ -242,8 +442,92 @@ def ui_view_handle_event(view: Optional[UIView], ev: UIEvent) -> int:
     return UI_CMD_NONE
 
 
+def _ui_view_draw_label(view: UIView) -> int:
+    r = view.content_rect
+    text = view.text
+    x = 0
+
+    if view.bound_win is None:
+        return -1
+    if ui_rect_is_empty(r):
+        return 0
+
+    if text is None:
+        text = ""
+    if len(text) > r.width:
+        text = text[:r.width]
+
+    if view.fill_ch:
+        if lc_wfill(view.bound_win, 0, 0, r.height, r.width, view.fill_ch, view.fill_attr) != 0:
+            return -1
+    else:
+        if lc_wclear(view.bound_win) != 0:
+            return -1
+
+    if not text or r.height <= 0 or r.width <= 0:
+        return 0
+
+    if view.text_align == 1:
+        x = max(0, (r.width - len(text)) // 2)
+    elif view.text_align == 2:
+        x = max(0, r.width - len(text))
+    else:
+        x = 0
+
+    if lc_wmove(view.bound_win, 0, x) != 0:
+        return -1
+    return lc_waddstr(view.bound_win, text)
+
+
+def _ui_view_draw_panel(view: UIView) -> int:
+    r = view.frame_rect
+    if view.bound_win is None:
+        return -1
+    return lc_wdraw_panel(
+        view.bound_win,
+        0,
+        0,
+        r.height,
+        r.width,
+        title=view.title if view.title else None,
+        frame_attr=view.attr,
+        fill=view.fill_ch,
+        fill_attr=view.fill_attr,
+    )
+
+
+def _ui_view_draw_container(view: UIView) -> int:
+    r = view.content_rect
+    if view.bound_win is None:
+        return -1
+    if ui_rect_is_empty(r):
+        return 0
+    if view.fill_ch:
+        return lc_wfill(view.bound_win, 0, 0, r.height, r.width, view.fill_ch, view.fill_attr)
+    return lc_wclear(view.bound_win)
+
+
+def ui_view_draw_self(view: Optional[UIView], ctx: Optional[UIDrawContext] = None) -> int:
+    if view is None:
+        return -1
+    if view.bound_win is None:
+        return -1
+
+    if view.kind == UI_VIEWKIND_LABEL:
+        return _ui_view_draw_label(view)
+    if view.kind == UI_VIEWKIND_PANEL:
+        return _ui_view_draw_panel(view)
+    if view.kind == UI_VIEWKIND_CONTAINER:
+        return _ui_view_draw_container(view)
+    if view.kind == UI_VIEWKIND_ROOT:
+        return _ui_view_draw_container(view)
+
+    return lc_wclear(view.bound_win)
+
+
 def ui_view_draw(view: Optional[UIView]) -> int:
     child = None
+    ctx = UIDrawContext()
 
     if view is None:
         return -1
@@ -252,11 +536,8 @@ def ui_view_draw(view: Optional[UIView]) -> int:
     if view.bound_win is None:
         return -1
 
-    # Minimal skeleton rule:
-    # a view owns the full content region of its bound window.
-    # Frame drawing, title drawing and richer layout zoning live above this
-    # primitive baseline.
-    lc_wclear(view.bound_win)
+    if ui_view_draw_self(view) != 0:
+        return -1
     view.clear_dirty()
 
     for child in view.children:
