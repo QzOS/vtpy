@@ -100,7 +100,7 @@ def _reset_runtime_state() -> None:
     lc.cur_term = None
 
 
-def _stdscr_required() -> Optional[LCWin]:
+def _get_stdscr() -> Optional[LCWin]:
     return lc.stdscr
 
 
@@ -361,7 +361,7 @@ def lc_session():
 
 
 def lc_move(y: int, x: int) -> int:
-    stdscr = _stdscr_required()
+    stdscr = _get_stdscr()
     if stdscr is None:
         return -1
     if y < 0 or y >= stdscr.maxy or x < 0 or x >= stdscr.maxx:
@@ -370,14 +370,14 @@ def lc_move(y: int, x: int) -> int:
 
 
 def lc_put(ch: int) -> int:
-    stdscr = _stdscr_required()
+    stdscr = _get_stdscr()
     if stdscr is None:
         return -1
     return lc_wput(stdscr, ch, LC_ATTR_NONE)
 
 
 def lc_addstr(s: str) -> int:
-    stdscr = _stdscr_required()
+    stdscr = _get_stdscr()
     if stdscr is None:
         return -1
     if s is None:
@@ -386,7 +386,7 @@ def lc_addstr(s: str) -> int:
 
 
 def lc_addstr_attr(s: str, attr: int) -> int:
-    stdscr = _stdscr_required()
+    stdscr = _get_stdscr()
     if stdscr is None:
         return -1
     if s is None:
@@ -395,14 +395,14 @@ def lc_addstr_attr(s: str, attr: int) -> int:
 
 
 def lc_mvaddstr(y: int, x: int, s: str) -> int:
-    stdscr = _stdscr_required()
+    stdscr = _get_stdscr()
     if stdscr is None:
         return -1
     return lc_mvwaddstr(stdscr, y, x, s)
 
 
 def lc_put_attr(ch: int, attr: int) -> int:
-    stdscr = _stdscr_required()
+    stdscr = _get_stdscr()
     if stdscr is None:
         return -1
     return lc_wput(stdscr, ch, attr)
@@ -416,35 +416,35 @@ def lc_fill(
     ch: str = " ",
     attr: int = LC_ATTR_NONE,
 ) -> int:
-    stdscr = _stdscr_required()
+    stdscr = _get_stdscr()
     if stdscr is None:
         return -1
     return lc_wfill(stdscr, y, x, height, width, ch, attr)
 
 
 def lc_touchline(y: int, n: int = 1) -> int:
-    stdscr = _stdscr_required()
+    stdscr = _get_stdscr()
     if stdscr is None:
         return -1
     return lc_wtouchline(stdscr, y, n)
 
 
 def lc_touchwin() -> int:
-    stdscr = _stdscr_required()
+    stdscr = _get_stdscr()
     if stdscr is None:
         return -1
     return lc_wtouchwin(stdscr)
 
 
 def lc_insdelln(n: int) -> int:
-    stdscr = _stdscr_required()
+    stdscr = _get_stdscr()
     if stdscr is None:
         return -1
     return lc_winsdelln(stdscr, n)
 
 
 def lc_scrl(n: int) -> int:
-    stdscr = _stdscr_required()
+    stdscr = _get_stdscr()
     if stdscr is None:
         return -1
     return lc_wscrl(stdscr, n)
@@ -462,14 +462,14 @@ def lc_center_x(width: int, text: str) -> int:
 
 
 def lc_draw_hline(y: int, x: int, width: int, ch: str = "-", attr: int = LC_ATTR_NONE) -> int:
-    stdscr = _stdscr_required()
+    stdscr = _get_stdscr()
     if stdscr is None:
         return -1
     return lc_wdraw_hline(stdscr, y, x, width, ch, attr)
 
 
 def lc_draw_vline(y: int, x: int, height: int, ch: str = "|", attr: int = LC_ATTR_NONE) -> int:
-    stdscr = _stdscr_required()
+    stdscr = _get_stdscr()
     if stdscr is None:
         return -1
     return lc_wdraw_vline(stdscr, y, x, height, ch, attr)
@@ -488,7 +488,7 @@ def lc_draw_box(
     bl: str = "+",
     br: str = "+",
 ) -> int:
-    stdscr = _stdscr_required()
+    stdscr = _get_stdscr()
     if stdscr is None:
         return -1
     return lc_wdraw_box(stdscr, y, x, height, width, attr, hch, vch, tl, tr, bl, br)
@@ -502,7 +502,7 @@ def lc_draw_box_title(
     title: str,
     attr: int = LC_ATTR_NONE,
 ) -> int:
-    stdscr = _stdscr_required()
+    stdscr = _get_stdscr()
     if stdscr is None:
         return -1
     return lc_wdraw_box_title(
@@ -526,7 +526,7 @@ def lc_draw_panel(
     bl: str = "+",
     br: str = "+",
 ) -> int:
-    stdscr = _stdscr_required()
+    stdscr = _get_stdscr()
     if stdscr is None:
         return -1
     return lc_wdraw_panel(
@@ -544,14 +544,14 @@ def lc_draw_panel(
 
 
 def lc_addstr_at(y: int, x: int, s: str) -> int:
-    stdscr = _stdscr_required()
+    stdscr = _get_stdscr()
     if stdscr is None:
         return -1
     return lc_mvwaddstr(stdscr, y, x, s)
 
 
 def lc_addstr_centered(y: int, s: str) -> int:
-    stdscr = _stdscr_required()
+    stdscr = _get_stdscr()
     if stdscr is None:
         return -1
     x = lc_center_x(lc.cols, s)
