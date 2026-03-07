@@ -714,3 +714,11 @@ def lc_meta_esc(on: bool) -> int:
         return -1
     lc.meta_on = bool(on)
     return 0
+
+# Bind the runtime-owned screen/session state into the refresh layer only
+# after this module has finished defining that contract surface. This avoids
+# an import-time lc_screen <-> lc_refresh cycle while keeping refresh coupled
+# to an explicit runtime-facing helper boundary.
+from lc_refresh import lc_bind_runtime as _lc_refresh_bind_runtime
+
+_lc_refresh_bind_runtime(sys.modules[__name__])

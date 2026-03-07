@@ -3,27 +3,64 @@ from typing import Optional
 from lc_term import LC_ATTR_NONE, LC_DIRTY, LC_FORCEPAINT
 from lc_window import LCCell, LCRow, LCWin
 
-from lc_screen import (
-    lc,
-    lc_refresh_cache_has_shape,
-    lc_refresh_ensure_virtual_cache_shape,
-    lc_refresh_mark_full_virtual_dirty,
-    lc_refresh_physical_cache_valid,
-    lc_refresh_reinit_physical_cache,
-    lc_refresh_resize_gate,
-    lc_refresh_session_ready,
-    lc_refresh_target_after_resize,
-)
-
 LC_RENDER_BATCH_BYTES = 8192
+
+_runtime = None
+
+
+def lc_bind_runtime(runtime_module) -> None:
+    global _runtime
+    _runtime = runtime_module
+
+
+def _get_runtime():
+    if _runtime is None:
+        raise RuntimeError("lc_refresh runtime is not bound")
+    return _runtime
+
+
+def _lc():
+    return _get_runtime().lc
+
+
+def _refresh_cache_has_shape(cache: list[list[LCCell]], rows: int, cols: int) -> bool:
+    return _get_runtime().lc_refresh_cache_has_shape(cache, rows, cols)
+
+
+def _refresh_ensure_virtual_cache_shape() -> None:
+    _get_runtime().lc_refresh_ensure_virtual_cache_shape()
+
+
+def _refresh_mark_full_virtual_dirty() -> None:
+    _get_runtime().lc_refresh_mark_full_virtual_dirty()
+
+
+def _refresh_physical_cache_valid() -> bool:
+    return _get_runtime().lc_refresh_physical_cache_valid()
+
+
+def _refresh_reinit_physical_cache() -> None:
+    _get_runtime().lc_refresh_reinit_physical_cache()
+
+
+def _refresh_resize_gate() -> int:
+    return _get_runtime().lc_refresh_resize_gate()
+
+
+def _refresh_session_ready() -> bool:
+    return _get_runtime().lc_refresh_session_ready()
+
+
+def _refresh_target_after_resize(requested: Optional[LCWin], resize_rc: int) -> Optional[LCWin]:
+    return _get_runtime().lc_refresh_target_after_resize(requested, resize_rc)
 
 
 def lc_check_resize() -> int:
-    return lc_refresh_resize_gate()
+    return _refresh_resize_gate()
 
 
 def _dirty_span_for_row(win: LCWin, ln: LCRow, abs_y: int) -> tuple[int, int]:
-    if abs_y < 0 or abs_y >= lc.lines:
+    if abs_y < 0 or abs_y >= _lc().lines:
         return 0, 0
     if not (ln.flags & LC_DIRTY):
         return 0, 0
@@ -44,56 +81,56 @@ def _clear_row_dirty(ln: LCRow) -> None:
 
 
 def _mark_virtual_dirty(abs_y: int, start_x: int, end_x: int) -> None:
-    if abs_y < 0 or abs_y >= lc.lines:
+    if abs_y < 0 or abs_y >= _lc().lines:
         return
     if start_x >= end_x:
         return
 
-    if lc.vdirty_first[abs_y] < 0:
-        lc.vdirty_first[abs_y] = start_x
-        lc.vdirty_last[abs_y] = end_x - 1
+    if _lc().vdirty_first[abs_y] < 0:
+        _lc().vdirty_first[abs_y] = start_x
+        _lc().vdirty_last[abs_y] = end_x - 1
         return
 
-    if start_x < lc.vdirty_first[abs_y]:
-        lc.vdirty_first[abs_y] = start_x
-    if (end_x - 1) > lc.vdirty_last[abs_y]:
-        lc.vdirty_last[abs_y] = end_x - 1
+    if start_x < _lc().vdirty_first[abs_y]:
+        _lc().vdirty_first[abs_y] = start_x
+    if (end_x - 1) > _lc().vdirty_last[abs_y]:
+        _lc().vdirty_last[abs_y] = end_x - 1
 
 
 def _clear_virtual_dirty(abs_y: int) -> None:
-    if abs_y < 0 or abs_y >= lc.lines:
+    if abs_y < 0 or abs_y >= _lc().lines:
         return
-    lc.vdirty_first[abs_y] = -1
-    lc.vdirty_last[abs_y] = -1
+    _lc().vdirty_first[abs_y] = -1
+    _lc().vdirty_last[abs_y] = -1
 
 
 def _sync_physical_cell(abs_y: int, abs_x: int, cell: LCCell) -> None:
-    scr = lc.screen[abs_y][abs_x]
+    scr = _lc().screen[abs_y][abs_x]
     scr.ch = cell.ch
     scr.attr = cell.attr
 
 
 def _note_emitted_attr(attr: int) -> None:
-    lc.cur_attr = attr
-    lc.term.note_attr(attr)
+    _lc().cur_attr = attr
+    _lc().term.note_attr(attr)
 
 
 def _append_move(buf: bytearray, y: int, x: int) -> None:
-    buf.extend(lc.term.move_bytes(y, x))
+    buf.extend(_lc().term.move_bytes(y, x))
 
 
 def _append_attr(buf: bytearray, attr: int) -> None:
-    buf.extend(lc.term.attr_bytes(attr))
+    buf.extend(_lc().term.attr_bytes(attr))
 
 
 def _append_text(buf: bytearray, text: str) -> None:
-    buf.extend(lc.term.encode_text(text))
+    buf.extend(_lc().term.encode_text(text))
 
 
 def _flush(buf: bytearray) -> None:
     if not buf:
         return
-    lc.term.write_bytes(buf)
+    _lc().term.write_bytes(buf)
     buf.clear()
 
 
@@ -107,18 +144,18 @@ def _emit_run(
     if not text:
         return
 
-    if lc.cur_y != abs_y or lc.cur_x != abs_x:
+    if _lc().cur_y != abs_y or _lc().cur_x != abs_x:
         _append_move(buf, abs_y, abs_x)
-        lc.cur_y = abs_y
-        lc.cur_x = abs_x
+        _lc().cur_y = abs_y
+        _lc().cur_x = abs_x
 
-    if lc.cur_attr != attr:
+    if _lc().cur_attr != attr:
         _append_attr(buf, attr)
         _note_emitted_attr(attr)
 
     _append_text(buf, text)
-    lc.cur_y = abs_y
-    lc.cur_x = abs_x + len(text)
+    _lc().cur_y = abs_y
+    _lc().cur_x = abs_x + len(text)
 
 
 def _flush_cell_run(
@@ -136,14 +173,14 @@ def _flush_cell_run(
 
 
 def _resolve_refresh_window(win: Optional[LCWin]) -> tuple[int, Optional[LCWin]]:
-    if not lc_refresh_session_ready():
+    if not _refresh_session_ready():
         return -1, None
 
     rc = lc_check_resize()
     if rc < 0:
         return -1, None
 
-    resolved = lc_refresh_target_after_resize(win, rc)
+    resolved = _refresh_target_after_resize(win, rc)
     if resolved is None or not resolved.alive:
         return -1, None
 
@@ -162,12 +199,12 @@ def lc_wstage(win: Optional[LCWin]) -> int:
     if rc != 0 or win is None:
         return -1
 
-    if not lc_refresh_cache_has_shape(lc.vscreen, lc.lines, lc.cols):
-        lc_refresh_ensure_virtual_cache_shape()
+    if not _refresh_cache_has_shape(_lc().vscreen, _lc().lines, _lc().cols):
+        _refresh_ensure_virtual_cache_shape()
 
     for y in range(win.maxy):
         abs_y = win.begy + y
-        if abs_y < 0 or abs_y >= lc.lines:
+        if abs_y < 0 or abs_y >= _lc().lines:
             continue
 
         ln = win.lines[y]
@@ -183,11 +220,11 @@ def lc_wstage(win: Optional[LCWin]) -> int:
 
         for x in range(start_x, end_x):
             abs_x = win.begx + x
-            if abs_x < 0 or abs_x >= lc.cols:
+            if abs_x < 0 or abs_x >= _lc().cols:
                 continue
 
             src = ln.line[x]
-            dst = lc.vscreen[abs_y][abs_x]
+            dst = _lc().vscreen[abs_y][abs_x]
             if dst.ch != src.ch or dst.attr != src.attr:
                 dst.ch = src.ch
                 dst.attr = src.attr
@@ -195,7 +232,7 @@ def lc_wstage(win: Optional[LCWin]) -> int:
 
         if row_changed:
             clipped_start = max(0, win.begx + start_x)
-            clipped_end = min(lc.cols, win.begx + end_x)
+            clipped_end = min(_lc().cols, win.begx + end_x)
             if clipped_start < clipped_end:
                 _mark_virtual_dirty(abs_y, clipped_start, clipped_end)
 
@@ -203,12 +240,12 @@ def lc_wstage(win: Optional[LCWin]) -> int:
 
     final_y = win.begy + win.cury
     final_x = win.begx + win.curx
-    if 0 <= final_y < lc.lines and 0 <= final_x < lc.cols:
-        lc.virtual_cur_y = final_y
-        lc.virtual_cur_x = final_x
-        lc.virtual_cursor_valid = True
+    if 0 <= final_y < _lc().lines and 0 <= final_x < _lc().cols:
+        _lc().virtual_cur_y = final_y
+        _lc().virtual_cur_x = final_x
+        _lc().virtual_cursor_valid = True
     else:
-        lc.virtual_cursor_valid = False
+        _lc().virtual_cursor_valid = False
 
     return 0
 
@@ -224,22 +261,22 @@ def lc_doupdate() -> int:
         return 0
 
     physical_reinit = False
-    if not lc_refresh_physical_cache_valid():
-        lc_refresh_reinit_physical_cache()
+    if not _refresh_physical_cache_valid():
+        _refresh_reinit_physical_cache()
         physical_reinit = True
 
-    lc_refresh_ensure_virtual_cache_shape()
+    _refresh_ensure_virtual_cache_shape()
 
     # If the physical cache was reinitialized, the terminal was logically
     # cleared. The full desired screen must therefore be considered dirty.
     if physical_reinit:
-        lc_refresh_mark_full_virtual_dirty()
+        _refresh_mark_full_virtual_dirty()
 
     out = bytearray()
 
-    for abs_y in range(lc.lines):
-        first = lc.vdirty_first[abs_y]
-        last = lc.vdirty_last[abs_y]
+    for abs_y in range(_lc().lines):
+        first = _lc().vdirty_first[abs_y]
+        last = _lc().vdirty_last[abs_y]
         if first < 0 or last < first:
             continue
 
@@ -249,8 +286,8 @@ def lc_doupdate() -> int:
         run_cells: list[LCCell] = []
 
         for abs_x in range(start_x, end_x):
-            cell = lc.vscreen[abs_y][abs_x]
-            scr = lc.screen[abs_y][abs_x]
+            cell = _lc().vscreen[abs_y][abs_x]
+            scr = _lc().screen[abs_y][abs_x]
             if scr.ch == cell.ch and scr.attr == cell.attr:
                 _flush_cell_run(out, abs_y, run_start_x, run_cells)
                 run_start_x = -1
@@ -281,15 +318,15 @@ def lc_doupdate() -> int:
 
         _clear_virtual_dirty(abs_y)
 
-    if lc.virtual_cursor_valid:
-        final_y = lc.virtual_cur_y
-        final_x = lc.virtual_cur_x
-        if final_y < lc.lines and final_x < lc.cols:
+    if _lc().virtual_cursor_valid:
+        final_y = _lc().virtual_cur_y
+        final_x = _lc().virtual_cur_x
+        if final_y < _lc().lines and final_x < _lc().cols:
             _append_move(out, final_y, final_x)
-            lc.cur_y = final_y
-            lc.cur_x = final_x
+            _lc().cur_y = final_y
+            _lc().cur_x = final_x
 
-    if lc.cur_attr != LC_ATTR_NONE:
+    if _lc().cur_attr != LC_ATTR_NONE:
         _append_attr(out, LC_ATTR_NONE)
         _note_emitted_attr(LC_ATTR_NONE)
 
@@ -309,7 +346,7 @@ def lc_wstageflush(win: Optional[LCWin]) -> int:
 
 
 def lc_refresh() -> int:
-    return lc_wstageflush(lc.stdscr)
+    return lc_wstageflush(_lc().stdscr)
 
 
 def lc_wnoutrefresh(win: Optional[LCWin]) -> int:
