@@ -4,8 +4,9 @@ from lc_screen import (
     lc_draw_box,
     lc_draw_hline,
     lc_draw_vline,
+    lc_addstr_attr,
 )
-from lc_term import LC_ATTR_NONE
+from lc_term import LC_ATTR_NONE, LC_ATTR_BOLD
 from lc_window import lc_new
 
 
@@ -80,4 +81,16 @@ def test_draw_box_degenerate_width_one():
     assert win.lines[1].line[2].ch == "|"
     assert win.lines[2].line[2].ch == "|"
     assert win.lines[3].line[2].ch == "|"
+    lc.stdscr = old_stdscr
+
+
+def test_addstr_attr_writes_with_attribute():
+    old_stdscr = lc.stdscr
+    win = lc_new(2, 5, 0, 0)
+    lc.stdscr = win
+    assert lc_addstr_attr("ok", LC_ATTR_BOLD) == 0
+    assert win.lines[0].line[0].ch == "o"
+    assert win.lines[0].line[1].ch == "k"
+    assert win.lines[0].line[0].attr == LC_ATTR_BOLD
+    assert win.lines[0].line[1].attr == LC_ATTR_BOLD
     lc.stdscr = old_stdscr

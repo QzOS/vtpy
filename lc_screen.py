@@ -21,6 +21,7 @@ from lc_window import (
     lc_invalidate_children,
     lc_subwin,
     lc_waddstr,
+    lc_waddstr_attr,
     lc_wdraw_panel,
     lc_wdraw_box,
     lc_wdraw_box_title,
@@ -343,6 +344,14 @@ def lc_addstr(s: str) -> int:
     if s is None:
         return -1
     return lc_waddstr(lc.stdscr, s)
+
+
+def lc_addstr_attr(s: str, attr: int) -> int:
+    if lc.stdscr is None:
+        return -1
+    if s is None:
+        return -1
+    return lc_waddstr_attr(lc.stdscr, s, attr)
 
 
 def lc_mvaddstr(y: int, x: int, s: str) -> int:

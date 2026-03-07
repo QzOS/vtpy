@@ -708,6 +708,46 @@ def lc_wfill(
 # - Invalid window or invalid current cursor state still returns -1.
 # ---------------------------------------------------------------------------
 
+def lc_waddstr_attr(win: Optional[LCWin], s: str, attr: int) -> int:
+    # Attributed variant of lc_waddstr() with the same saturating cursor
+    # semantics. The full string is not guaranteed to be written; the visible
+    # prefix is stored and the final writable cell, if reached, is written and
+    # the cursor saturates there.
+    if s is None:
+        return -1
+    if _require_live_window(win) != 0:
+        return -1
+    if win.maxx <= 0 or win.maxy <= 0:
+        return -1
+    if not _cursor_writable(win):
+        return -1
+    if not s:
+        return 0
+
+    if _cursor_at_last_cell(win):
+        _set_cell(win, win.cury, win.curx, s[0], attr)
+        return 0
+
+    off = 0
+    slen = len(s)
+
+    while off < slen:
+        if not _cursor_writable(win):
+            return -1
+        if _cursor_at_last_cell(win):
+            break
+
+        row_space = win.maxx - win.curx
+        chunk_len = min(slen - off, row_space)
+        chunk = s[off:off + chunk_len]
+
+        _store_hspan_text_unchecked(win, win.cury, win.curx, chunk, attr)
+        _advance_cursor_after_span(win, chunk_len)
+        off += chunk_len
+
+    return 0
+
+
 def lc_waddstr(win: Optional[LCWin], s: str) -> int:
     if s is None:
         return -1

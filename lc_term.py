@@ -8,6 +8,79 @@ LC_ATTR_BOLD = 1 << 0
 LC_ATTR_UNDERLINE = 1 << 1
 LC_ATTR_REVERSE = 1 << 2
 
+# Attribute layout:
+# - bits 0..7   : style flags (bold, underline, reverse, etc.)
+# - bits 8..15  : fg color index (0 = default, 1..n = palette index)
+# - bits 16..23 : bg color index (0 = default, 1..n = palette index)
+# - bits 24..31 : reserved for future expansion
+LC_ATTR_STYLE_MASK = 0xFF
+
+LC_ATTR_FG_SHIFT = 8
+LC_ATTR_BG_SHIFT = 16
+LC_ATTR_COLOR_MASK = 0xFF
+
+# Logical color indices for the basic 16-color VT palette.
+# 0 = terminal default, 1..8 = normal, 9..16 = bright.
+LC_COLOR_DEFAULT = 0
+LC_COLOR_BLACK = 1
+LC_COLOR_RED = 2
+LC_COLOR_GREEN = 3
+LC_COLOR_YELLOW = 4
+LC_COLOR_BLUE = 5
+LC_COLOR_MAGENTA = 6
+LC_COLOR_CYAN = 7
+LC_COLOR_WHITE = 8
+LC_COLOR_BRIGHT_BLACK = 9
+LC_COLOR_BRIGHT_RED = 10
+LC_COLOR_BRIGHT_GREEN = 11
+LC_COLOR_BRIGHT_YELLOW = 12
+LC_COLOR_BRIGHT_BLUE = 13
+LC_COLOR_BRIGHT_MAGENTA = 14
+LC_COLOR_BRIGHT_CYAN = 15
+LC_COLOR_BRIGHT_WHITE = 16
+
+
+def lc_attr_make(
+    style: int = 0,
+    fg: int = LC_COLOR_DEFAULT,
+    bg: int = LC_COLOR_DEFAULT,
+) -> int:
+    fg_byte = fg & LC_ATTR_COLOR_MASK
+    bg_byte = bg & LC_ATTR_COLOR_MASK
+    return (
+        (style & LC_ATTR_STYLE_MASK)
+        | (fg_byte << LC_ATTR_FG_SHIFT)
+        | (bg_byte << LC_ATTR_BG_SHIFT)
+    )
+
+
+def lc_attr_style(attr: int) -> int:
+    return attr & LC_ATTR_STYLE_MASK
+
+
+def lc_attr_fg(attr: int) -> int:
+    return (attr >> LC_ATTR_FG_SHIFT) & LC_ATTR_COLOR_MASK
+
+
+def lc_attr_bg(attr: int) -> int:
+    return (attr >> LC_ATTR_BG_SHIFT) & LC_ATTR_COLOR_MASK
+
+
+def _sgr_16_color(is_fg: bool, idx: int) -> str:
+    # Map 1..8 to normal 30-37/40-47, 9..16 to bright 90-97/100-107.
+    if idx <= 0:
+        return ""
+
+    base_normal = 30 if is_fg else 40
+    base_bright = 90 if is_fg else 100
+
+    if 1 <= idx <= 8:
+        return str(base_normal + (idx - 1))
+    if 9 <= idx <= 16:
+        return str(base_bright + (idx - 9))
+    return ""
+
+
 LC_DIRTY = 1
 LC_FORCEPAINT = 2
 
@@ -78,16 +151,29 @@ class Terminal:
         self.write(self.ops.enable_wrap if on else self.ops.disable_wrap)
 
     def attr_bytes(self, attr: int) -> bytes:
+        # LC_ATTR_NONE means "reset to defaults".
         if attr == LC_ATTR_NONE:
             return self.ops.sgr_reset.encode("ascii")
 
-        parts = ["0"]
-        if attr & LC_ATTR_BOLD:
+        style = lc_attr_style(attr)
+        fg_idx = lc_attr_fg(attr)
+        bg_idx = lc_attr_bg(attr)
+
+        parts: list[str] = ["0"]
+        if style & LC_ATTR_BOLD:
             parts.append("1")
-        if attr & LC_ATTR_UNDERLINE:
+        if style & LC_ATTR_UNDERLINE:
             parts.append("4")
-        if attr & LC_ATTR_REVERSE:
+        if style & LC_ATTR_REVERSE:
             parts.append("7")
+
+        fg_sgr = _sgr_16_color(True, fg_idx)
+        if fg_sgr:
+            parts.append(fg_sgr)
+
+        bg_sgr = _sgr_16_color(False, bg_idx)
+        if bg_sgr:
+            parts.append(bg_sgr)
 
         return ("\x1b[" + ";".join(parts) + "m").encode("ascii")
 

@@ -4,6 +4,13 @@ from lc_term import (
     LC_ATTR_BOLD,
     LC_ATTR_UNDERLINE,
     LC_ATTR_REVERSE,
+    LC_COLOR_RED,
+    LC_COLOR_BLUE,
+    LC_COLOR_BRIGHT_YELLOW,
+    lc_attr_make,
+    lc_attr_style,
+    lc_attr_fg,
+    lc_attr_bg,
 )
 
 
@@ -84,3 +91,22 @@ def test_note_attr():
     # subsequent set_attr with same value should not emit
     term.set_attr(LC_ATTR_BOLD)
     assert term.output == []
+
+
+def test_lc_attr_helpers_roundtrip_and_mask():
+    attr = lc_attr_make(LC_ATTR_BOLD | 0x100, fg=LC_COLOR_RED, bg=LC_COLOR_BLUE)
+    assert lc_attr_style(attr) == LC_ATTR_BOLD
+    assert lc_attr_fg(attr) == LC_COLOR_RED
+    assert lc_attr_bg(attr) == LC_COLOR_BLUE
+
+
+def test_set_attr_with_fg_bg_colors():
+    term = FakeTerminal()
+    term.set_attr(lc_attr_make(LC_ATTR_BOLD, fg=LC_COLOR_RED, bg=LC_COLOR_BLUE))
+    assert term.output == ["\x1b[0;1;31;44m"]
+
+
+def test_set_attr_with_bright_color():
+    term = FakeTerminal()
+    term.set_attr(lc_attr_make(0, fg=LC_COLOR_BRIGHT_YELLOW))
+    assert term.output == ["\x1b[0;93m"]

@@ -6,6 +6,7 @@ from lc_window import (
     lc_wmove,
     lc_wput,
     lc_waddstr,
+    lc_waddstr_attr,
     lc_mvwaddstr,
     lc_subwin,
     fill_rect,
@@ -335,3 +336,78 @@ def test_root_invariant_after_resize_replacement():
 
     assert new_root.alive is True
     assert new_root.root is new_root
+
+
+def test_lc_waddstr_attr_sets_attribute_on_written_cells():
+    win = lc_new(2, 4, 0, 0)
+    assert win is not None
+
+    assert lc_waddstr_attr(win, "ab", LC_ATTR_BOLD) == 0
+    assert win.lines[0].line[0].ch == 'a'
+    assert win.lines[0].line[1].ch == 'b'
+    assert win.lines[0].line[0].attr == LC_ATTR_BOLD
+    assert win.lines[0].line[1].attr == LC_ATTR_BOLD
+
+
+def test_lc_waddstr_attr_saturates_at_last_cell():
+    win = lc_new(1, 3, 0, 0)
+    assert win is not None
+
+    assert lc_wmove(win, 0, 1) == 0
+    assert lc_waddstr_attr(win, "XYZ", LC_ATTR_BOLD) == 0
+
+    assert win.lines[0].line[1].ch == 'X'
+    assert win.lines[0].line[2].ch == 'Y'
+    assert win.lines[0].line[1].attr == LC_ATTR_BOLD
+    assert win.lines[0].line[2].attr == LC_ATTR_BOLD
+    assert win.curx == 2
+    assert win.cury == 0
+
+
+def test_lc_waddstr_attr_at_last_cell_writes_single_char():
+    """When the cursor is already at the last writable cell, only the first
+    character of the string should be written with the attribute."""
+    win = lc_new(1, 3, 0, 0)
+    assert win is not None
+
+    # Move cursor to the last cell (0, 2)
+    assert lc_wmove(win, 0, 2) == 0
+    assert lc_waddstr_attr(win, "ABC", LC_ATTR_BOLD) == 0
+
+    # Only 'A' should be written at (0, 2)
+    assert win.lines[0].line[2].ch == 'A'
+    assert win.lines[0].line[2].attr == LC_ATTR_BOLD
+    # Cursor should remain at the last cell
+    assert win.curx == 2
+    assert win.cury == 0
+
+
+def test_lc_waddstr_attr_spans_multiple_rows():
+    """Writing a string that is longer than a single row should correctly
+    apply the attribute across row boundaries."""
+    win = lc_new(3, 4, 0, 0)
+    assert win is not None
+
+    # Write a string longer than one row (4 chars per row, 3 rows)
+    # This should span row 0 and row 1
+    assert lc_waddstr_attr(win, "ABCDEFGH", LC_ATTR_BOLD) == 0
+
+    # Row 0: A B C D
+    assert win.lines[0].line[0].ch == 'A'
+    assert win.lines[0].line[1].ch == 'B'
+    assert win.lines[0].line[2].ch == 'C'
+    assert win.lines[0].line[3].ch == 'D'
+    assert win.lines[0].line[0].attr == LC_ATTR_BOLD
+    assert win.lines[0].line[3].attr == LC_ATTR_BOLD
+
+    # Row 1: E F G H
+    assert win.lines[1].line[0].ch == 'E'
+    assert win.lines[1].line[1].ch == 'F'
+    assert win.lines[1].line[2].ch == 'G'
+    assert win.lines[1].line[3].ch == 'H'
+    assert win.lines[1].line[0].attr == LC_ATTR_BOLD
+    assert win.lines[1].line[3].attr == LC_ATTR_BOLD
+
+    # Cursor should advance to row 2, column 0
+    assert win.cury == 2
+    assert win.curx == 0
