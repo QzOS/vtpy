@@ -1,4 +1,5 @@
 from lc_window import (
+    _fill_rect_extents_clipped,
     LCWin,
     lc_new,
     lc_free,
@@ -9,7 +10,6 @@ from lc_window import (
     lc_waddstr_attr,
     lc_mvwaddstr,
     lc_subwin,
-    fill_rect,
     lc_wdraw_hline,
     lc_wdraw_vline,
     lc_wdraw_box,
@@ -145,7 +145,7 @@ def test_dead_window_clears_root():
 
 
 # ---------------------------------------------------------------------------
-# Write operation family: clipped drawing/fill (fill_rect, lc_wdraw_hline,
+# Write operation family: clipped drawing/fill (_fill_rect_extents_clipped, lc_wdraw_hline,
 # lc_wdraw_vline, lc_wdraw_box) — verify cell content, dirty ranges, clipping
 # ---------------------------------------------------------------------------
 
@@ -165,7 +165,7 @@ def test_fill_rect_writes_expected_cells_and_dirty_range():
     assert win is not None
     _clear_dirty(win)
 
-    fill_rect(win, 1, 1, 3, 4, "x", LC_ATTR_NONE)
+    _fill_rect_extents_clipped(win, 1, 1, 3, 4, "x", LC_ATTR_NONE)
 
     assert _row_text(win, 0) == "      "
     assert _row_text(win, 1) == " xxx  "
@@ -185,7 +185,7 @@ def test_fill_rect_clips_to_window_bounds():
     assert win is not None
 
     # Request extends beyond window in all directions.
-    fill_rect(win, -1, -1, 10, 10, "Z", LC_ATTR_NONE)
+    _fill_rect_extents_clipped(win, -1, -1, 10, 10, "Z", LC_ATTR_NONE)
 
     for y in range(3):
         assert _row_text(win, y) == "ZZZZ"

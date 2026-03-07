@@ -45,13 +45,27 @@ def _require_live_window(win: Optional[LCWin]) -> int:
     return 0
 
 
+def _require_valid_window(win: Optional[LCWin]) -> int:
+    if not _is_window_structurally_valid(win):
+        return -1
+    return 0
+
+
+def _require_writable_cursor(win: Optional[LCWin]) -> int:
+    if not _is_live_window(win):
+        return -1
+    if not _is_cursor_writable(win):
+        return -1
+    return 0
+
+
 def _coerce_draw_char(ch: Optional[str]) -> Optional[str]:
     if ch is None or not ch:
         return None
     return ch[0]
 
 
-def _valid_window_coord(win: LCWin, y: int, x: int) -> bool:
+def _is_window_coord(win: LCWin, y: int, x: int) -> bool:
     return 0 <= y < win.maxy and 0 <= x < win.maxx
 
 
@@ -72,7 +86,7 @@ def _root_consistent(win: LCWin) -> bool:
     return win.root is not None and win.root.alive
 
 
-def _window_invariants_hold(win: Optional[LCWin]) -> bool:
+def _is_window_structurally_valid(win: Optional[LCWin]) -> bool:
     if win is None:
         return False
     if not win.alive:
@@ -85,7 +99,7 @@ def _window_invariants_hold(win: Optional[LCWin]) -> bool:
 def _cursor_write_prefix_len(win: LCWin, text_len: int) -> int:
     if text_len <= 0:
         return 0
-    if not _cursor_writable(win):
+    if not _is_cursor_writable(win):
         return 0
 
     remaining_cells = ((win.maxy - 1 - win.cury) * win.maxx) + (win.maxx - win.curx)
@@ -101,7 +115,7 @@ def _waddstr_common(win: Optional[LCWin], s: str, attr: int) -> int:
         return -1
     if win.maxx <= 0 or win.maxy <= 0:
         return -1
-    if not _cursor_writable(win):
+    if _require_writable_cursor(win) != 0:
         return -1
     if not s:
         return 0
@@ -145,7 +159,7 @@ def _mark_window_dirty_rows(
         return
 
     for y in range(ys, ye):
-        _mark_window_dirty(win, y, start, end)
+        _mark_window_dirty_span(win, y, start, end)
 
 
 def _clip_range(start: int, length: int, limit: int) -> tuple[int, int]:
@@ -163,6 +177,12 @@ def _clip_range(start: int, length: int, limit: int) -> tuple[int, int]:
     if start >= end:
         return 0, 0
     return start, end
+
+
+def _rect_shape_to_extents(y: int, x: int, height: int, width: int) -> tuple[int, int, int, int]:
+    if height <= 0 or width <= 0:
+        return y, x, y, x
+    return y, x, y + height, x + width
 
 
 def _clip_hspan(win: Optional[LCWin], y: int, x: int, width: int) -> tuple[Optional[LCRow], int, int]:
@@ -184,7 +204,7 @@ def _clip_vspan(win: Optional[LCWin], y: int, x: int, height: int) -> tuple[int,
     return _clip_range(y, height, win.maxy)
 
 
-def _clip_rect(win: Optional[LCWin], y0: int, x0: int, y1: int, x1: int) -> tuple[int, int, int, int]:
+def _clip_rect_extents(win: Optional[LCWin], y0: int, x0: int, y1: int, x1: int) -> tuple[int, int, int, int]:
     if win is None:
         return 0, 0, 0, 0
     if y0 >= y1 or x0 >= x1:
@@ -197,7 +217,18 @@ def _clip_rect(win: Optional[LCWin], y0: int, x0: int, y1: int, x1: int) -> tupl
     return ys, xs, ye, xe
 
 
-def _normalize_rect(y: int, x: int, height: int, width: int) -> tuple[int, int, int, int]:
+def _clip_rect_shape(
+    win: Optional[LCWin],
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+) -> tuple[int, int, int, int]:
+    y0, x0, y1, x1 = _rect_shape_to_extents(y, x, height, width)
+    return _clip_rect_extents(win, y0, x0, y1, x1)
+
+
+def _normalize_rect_shape(y: int, x: int, height: int, width: int) -> tuple[int, int, int, int]:
     if height <= 0 or width <= 0:
         return y, x, 0, 0
     return y, x, height, width
@@ -206,13 +237,13 @@ def _normalize_rect(y: int, x: int, height: int, width: int) -> tuple[int, int, 
 def _box_edges(y: int, x: int, height: int, width: int) -> tuple[int, int, int, int]:
     top = y
     left = x
-    bottom = y + height - 1
-    right = x + width - 1
+    bottom = y + height - 1  # inclusive
+    right = x + width - 1    # inclusive
     return top, left, bottom, right
 
 
-def _interior_rect(y: int, x: int, height: int, width: int) -> tuple[int, int, int, int]:
-    y, x, height, width = _normalize_rect(y, x, height, width)
+def _interior_rect_shape(y: int, x: int, height: int, width: int) -> tuple[int, int, int, int]:
+    y, x, height, width = _normalize_rect_shape(y, x, height, width)
     if height <= 2 or width <= 2:
         return y + 1, x + 1, 0, 0
     return y + 1, x + 1, height - 2, width - 2
@@ -227,7 +258,7 @@ def _store_cell_unchecked(win: LCWin, y: int, x: int, ch: str, attr: int) -> Non
     assert outch is not None
     win.lines[y].line[x].ch = outch
     win.lines[y].line[x].attr = attr
-    _mark_window_dirty(win, y, x, x + 1)
+    _mark_window_dirty_span(win, y, x, x + 1)
 
 
 def _store_hspan_char_unchecked(
@@ -248,7 +279,7 @@ def _store_hspan_char_unchecked(
     for x in range(start, end):
         ln.line[x].ch = outch
         ln.line[x].attr = attr
-    _mark_window_dirty(win, y, start, end)
+    _mark_window_dirty_span(win, y, start, end)
 
 
 def _store_hspan_text_unchecked(win: LCWin, y: int, start: int, text: str, attr: int) -> None:
@@ -262,7 +293,7 @@ def _store_hspan_text_unchecked(win: LCWin, y: int, start: int, text: str, attr:
     for i, x in enumerate(range(start, end)):
         ln.line[x].ch = text[i]
         ln.line[x].attr = attr
-    _mark_window_dirty(win, y, start, end)
+    _mark_window_dirty_span(win, y, start, end)
 
 
 def _write_hspan(
@@ -319,7 +350,7 @@ def _write_text_clipped(
     return 0
 
 
-def _mark_window_dirty(win: Optional[LCWin], y: int, start: int, end: int) -> None:
+def _mark_window_dirty_span(win: Optional[LCWin], y: int, start: int, end: int) -> None:
     # Propagate a dirty span upward through the parent chain.
     # Shared-backing windows keep independent dirty metadata, so every write
     # must mark the local row and then the parent-relative span in ancestors.
@@ -329,7 +360,7 @@ def _mark_window_dirty(win: Optional[LCWin], y: int, start: int, end: int) -> No
     ce = end
 
     while cur is not None:
-        if not _window_invariants_hold(cur):
+        if not _is_window_structurally_valid(cur):
             return
         if cy < 0 or cy >= cur.maxy:
             return
@@ -351,7 +382,7 @@ def _set_cell(win: Optional[LCWin], y: int, x: int, ch: str, attr: int) -> None:
     # Validates bounds and aliveness, then delegates to the unchecked writer.
     if not _is_live_window(win):
         return
-    if not _valid_window_coord(win, y, x):
+    if not _is_window_coord(win, y, x):
         return
     if _coerce_draw_char(ch) is None:
         return
@@ -369,7 +400,7 @@ def _cursor_at_last_cell(win: LCWin) -> bool:
     return win.cury == (win.maxy - 1) and win.curx == (win.maxx - 1)
 
 
-def _cursor_writable(win: LCWin) -> bool:
+def _is_cursor_writable(win: LCWin) -> bool:
     if win.maxy <= 0 or win.maxx <= 0:
         return False
     if win.cury < 0 or win.cury >= win.maxy:
@@ -377,14 +408,6 @@ def _cursor_writable(win: LCWin) -> bool:
     if win.curx < 0 or win.curx >= win.maxx:
         return False
     return True
-
-
-def _cursor_strictly_valid(win: Optional[LCWin]) -> bool:
-    if win is None:
-        return False
-    if not win.alive:
-        return False
-    return _cursor_writable(win)
 
 
 def _advance_cursor(win: LCWin) -> None:
@@ -503,7 +526,7 @@ def lc_new(nlines: int, ncols: int, begin_y: int, begin_x: int) -> Optional[LCWi
         lines=lines
     )
     win.root = win
-    if not _window_invariants_hold(win):
+    if not _is_window_structurally_valid(win):
         return None
     return win
 
@@ -515,7 +538,7 @@ def lc_subwin(
     begin_y: int,
     begin_x: int,
 ) -> Optional[LCWin]:
-    if not _window_invariants_hold(parent):
+    if _require_valid_window(parent) != 0:
         return None
     if nlines <= 0 or ncols <= 0:
         return None
@@ -557,7 +580,7 @@ def lc_subwin(
         children=[],
         lines=lines,
     )
-    if not _window_invariants_hold(sub):
+    if not _is_window_structurally_valid(sub):
         return None
     parent.children.append(sub)
     return sub
@@ -570,14 +593,14 @@ def lc_panel_subwin(
     height: int,
     width: int,
 ) -> Optional[LCWin]:
-    if not _window_invariants_hold(parent):
+    if _require_valid_window(parent) != 0:
         return None
 
-    y, x, height, width = _normalize_rect(y, x, height, width)
+    y, x, height, width = _normalize_rect_shape(y, x, height, width)
     if height <= 0 or width <= 0:
         return None
 
-    inner_y, inner_x, inner_h, inner_w = _interior_rect(y, x, height, width)
+    inner_y, inner_x, inner_h, inner_w = _interior_rect_shape(y, x, height, width)
     if inner_h <= 0 or inner_w <= 0:
         return None
 
@@ -585,7 +608,7 @@ def lc_panel_subwin(
 
 
 def lc_panel_content_rect(y: int, x: int, height: int, width: int) -> tuple[int, int, int, int]:
-    return _interior_rect(y, x, height, width)
+    return _interior_rect_shape(y, x, height, width)
 
 
 def _detach_from_parent(win: LCWin) -> None:
@@ -762,7 +785,7 @@ def _shift_rows_in_window(
 # at explicit coordinates.
 # ---------------------------------------------------------------------------
 
-def fill_rect(
+def _fill_rect_extents_clipped(
     win: Optional[LCWin],
     y0: int,
     x0: int,
@@ -776,7 +799,7 @@ def fill_rect(
     if not ch:
         return
 
-    ys, xs, ye, xe = _clip_rect(win, y0, x0, y1, x1)
+    ys, xs, ye, xe = _clip_rect_extents(win, y0, x0, y1, x1)
     if ys >= ye or xs >= xe:
         return
 
@@ -784,31 +807,68 @@ def fill_rect(
         _write_hspan(win, y, xs, xe, ch, attr)
 
 
+def _fill_rect_shape_clipped(
+    win: Optional[LCWin],
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+    ch: str,
+    attr: int = LC_ATTR_NONE,
+) -> None:
+    if not _is_live_window(win):
+        return
+    if not ch:
+        return
+
+    ys, xs, ye, xe = _clip_rect_shape(win, y, x, height, width)
+    if ys >= ye or xs >= xe:
+        return
+
+    for y in range(ys, ye):
+        _write_hspan(win, y, xs, xe, ch, attr)
+
+
+def _draw_hline_shape_clipped(
+    win: Optional[LCWin],
+    y: int,
+    x: int,
+    width: int,
+    ch: str,
+    attr: int,
+) -> int:
+    ln, start, end = _clip_hspan(win, y, x, width)
+    if ln is None or start >= end:
+        return 0
+    _write_hspan(win, y, start, end, ch, attr)
+    return 0
+
+
 def lc_wclear(win: Optional[LCWin]) -> int:
     if not _is_live_window(win):
         return -1
-    fill_rect(win, 0, 0, win.maxy, win.maxx, ' ', LC_ATTR_NONE)
+    _fill_rect_shape_clipped(win, 0, 0, win.maxy, win.maxx, ' ', LC_ATTR_NONE)
     win.cury = 0
     win.curx = 0
     return 0
 
 
 def lc_wclrtobot(win: Optional[LCWin]) -> int:
-    if not _cursor_strictly_valid(win):
+    if _require_writable_cursor(win) != 0:
         return -1
 
     y = win.cury
     x = win.curx
-    fill_rect(win, y, x, y + 1, win.maxx, ' ', LC_ATTR_NONE)
+    _fill_rect_shape_clipped(win, y, x, 1, win.maxx - x, ' ', LC_ATTR_NONE)
     if y + 1 < win.maxy:
-        fill_rect(win, y + 1, 0, win.maxy, win.maxx, ' ', LC_ATTR_NONE)
+        _fill_rect_shape_clipped(win, y + 1, 0, win.maxy - (y + 1), win.maxx, ' ', LC_ATTR_NONE)
     return 0
 
 
 def lc_wclrtoeol(win: Optional[LCWin]) -> int:
-    if not _cursor_strictly_valid(win):
+    if _require_writable_cursor(win) != 0:
         return -1
-    fill_rect(win, win.cury, win.curx, win.cury + 1, win.maxx, ' ', LC_ATTR_NONE)
+    _fill_rect_shape_clipped(win, win.cury, win.curx, 1, win.maxx - win.curx, ' ', LC_ATTR_NONE)
     return 0
 
 
@@ -828,7 +888,7 @@ def lc_wfill(
         return -1
     if height <= 0 or width <= 0:
         return 0
-    fill_rect(win, y, x, y + height, x + width, outch, attr)
+    _fill_rect_shape_clipped(win, y, x, height, width, outch, attr)
     return 0
 
 
@@ -838,7 +898,7 @@ def lc_winsdelln(win: Optional[LCWin], n: int) -> int:
     # n < 0 deletes lines at cury, shifting lower content up.
     if _require_live_window(win) != 0:
         return -1
-    if not _cursor_writable(win):
+    if _require_writable_cursor(win) != 0:
         return -1
     if n == 0:
         return 0
@@ -892,7 +952,7 @@ def lc_waddstr(win: Optional[LCWin], s: str) -> int:
 def lc_wmove(win: Optional[LCWin], y: int, x: int) -> int:
     if _require_live_window(win) != 0:
         return -1
-    if not _valid_window_coord(win, y, x):
+    if not _is_window_coord(win, y, x):
         return -1
     win.cury = y
     win.curx = x
@@ -902,7 +962,7 @@ def lc_wmove(win: Optional[LCWin], y: int, x: int) -> int:
 def lc_wput(win: Optional[LCWin], ch: int, attr: int = LC_ATTR_NONE) -> int:
     if _require_live_window(win) != 0:
         return -1
-    if not _cursor_writable(win):
+    if _require_writable_cursor(win) != 0:
         return -1
 
     try:
@@ -941,12 +1001,7 @@ def lc_wdraw_hline(
     if width <= 0:
         return 0
 
-    ln, start, end = _clip_hspan(win, y, x, width)
-    if ln is None or start >= end:
-        return 0
-
-    _write_hspan(win, y, start, end, outch, attr)
-    return 0
+    return _draw_hline_shape_clipped(win, y, x, width, outch, attr)
 
 
 def lc_wdraw_vline(
@@ -998,7 +1053,7 @@ def lc_wdraw_box(
     if _require_live_window(win) != 0:
         return -1
 
-    y, x, height, width = _normalize_rect(y, x, height, width)
+    y, x, height, width = _normalize_rect_shape(y, x, height, width)
     if hch is None or vch is None or tl is None or tr is None or bl is None or br is None:
         return -1
     if height <= 0 or width <= 0:
@@ -1011,7 +1066,7 @@ def lc_wdraw_box(
         return lc_wdraw_vline(win, y, x, height, vch, attr)
 
     top, left, bottom, right = _box_edges(y, x, height, width)
-    inner_y, inner_x, inner_h, inner_w = _interior_rect(y, x, height, width)
+    inner_y, inner_x, inner_h, inner_w = _interior_rect_shape(y, x, height, width)
 
     rc = lc_wdraw_hline(win, top, left + 1, width - 2, hch, attr)
     if rc != 0:
@@ -1048,7 +1103,7 @@ def lc_wdraw_box_title(
     if _require_live_window(win) != 0:
         return -1
 
-    y, x, height, width = _normalize_rect(y, x, height, width)
+    y, x, height, width = _normalize_rect_shape(y, x, height, width)
     if height <= 0 or width <= 0:
         return 0
     if title is None:
@@ -1093,7 +1148,7 @@ def lc_wdraw_panel(
             return rc
 
     if fill is not None:
-        inner_y, inner_x, inner_h, inner_w = _interior_rect(y, x, height, width)
+        inner_y, inner_x, inner_h, inner_w = _interior_rect_shape(y, x, height, width)
         if inner_h > 0 and inner_w > 0:
             rc = lc_wfill(win, inner_y, inner_x, inner_h, inner_w, fill, fill_attr)
             if rc != 0:

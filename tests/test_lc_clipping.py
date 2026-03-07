@@ -1,10 +1,12 @@
 from lc_term import LC_ATTR_NONE
 from lc_window import (
     _box_edges,
+    _clip_rect_shape,
+    _fill_rect_extents_clipped,
     _box_title_span,
-    _interior_rect,
-    _normalize_rect,
-    fill_rect,
+    _interior_rect_shape,
+    _normalize_rect_shape,
+    _rect_shape_to_extents,
     lc_new,
     lc_waddstr,
     lc_wdraw_box,
@@ -23,7 +25,7 @@ def _row_text(win, y: int) -> str:
 
 def test_fill_rect_clips_negative_and_right_edge():
     win = lc_new(3, 5, 0, 0)
-    fill_rect(win, 0, -2, 2, 10, "x")
+    _fill_rect_extents_clipped(win, 0, -2, 2, 10, "x")
 
     assert _row_text(win, 0) == "xxxxx"
     assert _row_text(win, 1) == "xxxxx"
@@ -32,7 +34,7 @@ def test_fill_rect_clips_negative_and_right_edge():
 
 def test_fill_rect_clips_top_and_bottom():
     win = lc_new(4, 4, 0, 0)
-    fill_rect(win, -3, 1, 10, 3, "z")
+    _fill_rect_extents_clipped(win, -3, 1, 10, 3, "z")
 
     assert _row_text(win, 0) == " zz "
     assert _row_text(win, 1) == " zz "
@@ -42,7 +44,7 @@ def test_fill_rect_clips_top_and_bottom():
 
 def test_fill_rect_preserves_requested_attr():
     win = lc_new(2, 4, 0, 0)
-    fill_rect(win, 0, 1, 2, 3, "q", 7)
+    _fill_rect_extents_clipped(win, 0, 1, 2, 3, "q", 7)
 
     assert win.lines[0].line[0].ch == " "
     assert win.lines[0].line[1].ch == "q"
@@ -168,14 +170,29 @@ def test_box_degenerate_width_one_clips():
     assert _row_text(win, 3) == "    "
 
 
-def test_normalize_rect_keeps_positive_rect():
-    assert _normalize_rect(2, 3, 4, 5) == (2, 3, 4, 5)
+def test_rect_shape_to_extents_keeps_positive_rect():
+    assert _rect_shape_to_extents(2, 3, 4, 5) == (2, 3, 6, 8)
 
 
-def test_normalize_rect_zeroes_nonpositive_size():
-    assert _normalize_rect(2, 3, 0, 5) == (2, 3, 0, 0)
-    assert _normalize_rect(2, 3, 4, 0) == (2, 3, 0, 0)
-    assert _normalize_rect(2, 3, -1, 5) == (2, 3, 0, 0)
+def test_rect_shape_to_extents_zeroes_nonpositive_size():
+    assert _rect_shape_to_extents(2, 3, 0, 5) == (2, 3, 2, 3)
+    assert _rect_shape_to_extents(2, 3, 4, 0) == (2, 3, 2, 3)
+    assert _rect_shape_to_extents(2, 3, -1, 5) == (2, 3, 2, 3)
+
+
+def test_clip_rect_shape_clips_shape_against_window():
+    win = lc_new(4, 5, 0, 0)
+    assert _clip_rect_shape(win, -1, 1, 4, 10) == (0, 1, 3, 5)
+
+
+def test_normalize_rect_shape_keeps_positive_rect():
+    assert _normalize_rect_shape(2, 3, 4, 5) == (2, 3, 4, 5)
+
+
+def test_normalize_rect_shape_zeroes_nonpositive_size():
+    assert _normalize_rect_shape(2, 3, 0, 5) == (2, 3, 0, 0)
+    assert _normalize_rect_shape(2, 3, 4, 0) == (2, 3, 0, 0)
+    assert _normalize_rect_shape(2, 3, -1, 5) == (2, 3, 0, 0)
 
 
 def test_box_edges_returns_outer_bounds():
@@ -183,12 +200,12 @@ def test_box_edges_returns_outer_bounds():
 
 
 def test_interior_rect_for_regular_box():
-    assert _interior_rect(1, 2, 4, 5) == (2, 3, 2, 3)
+    assert _interior_rect_shape(1, 2, 4, 5) == (2, 3, 2, 3)
 
 
 def test_interior_rect_for_degenerate_box():
-    assert _interior_rect(1, 2, 2, 5) == (2, 3, 0, 0)
-    assert _interior_rect(1, 2, 5, 2) == (2, 3, 0, 0)
+    assert _interior_rect_shape(1, 2, 2, 5) == (2, 3, 0, 0)
+    assert _interior_rect_shape(1, 2, 5, 2) == (2, 3, 0, 0)
 
 
 def test_wfill_empty_char_is_error():

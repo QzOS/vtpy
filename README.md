@@ -451,14 +451,51 @@ Internal geometry helpers now exist to make future semantics less ad hoc:
 - `_clip_range()`
 - `_clip_hspan()`
 - `_clip_vspan()`
-- `_clip_rect()`
-- `_normalize_rect()`
+- `_clip_rect_extents()`
+- `_clip_rect_shape()`
+- `_normalize_rect_shape()`
+- `_rect_shape_to_extents()`
 - `_box_edges()`
-- `_interior_rect()`
+- `_interior_rect_shape()`
 
 These are internal for now. They exist to give names to recurring rectangle logic and reduce repeated coordinate arithmetic.
 
 The purpose is not abstraction for abstraction's sake. The purpose is to make later steps, such as titled boxes, content rects, and subwindow clipping, easier to implement without duplicating geometry logic in multiple public functions.
+
+### Internal helper naming rules
+
+Internal helper families should follow a consistent naming contract:
+
+- `_is_*` / `_has_*` - boolean predicates only, no side effects
+- `_require_*` - rc-style precondition gates returning `0` or `-1`
+- `_clip_*` - clipped geometry helpers returning bounded spans/rects
+- `*_clipped` - operations that accept partial or fully invisible geometry
+- `*_unchecked` - caller guarantees all preconditions
+
+This naming rule is internal, but it exists to keep semantics visible at call sites.
+
+### Geometry naming rules
+
+Internal geometry helpers should distinguish clearly between two rectangle forms:
+
+- `*_shape` means `(y, x, height, width)`
+- `*_extents` means `(y0, x0, y1, x1)` with half-open end coordinates
+
+Related conventions:
+
+- span helpers return half-open ranges `(start, end)`
+- `_box_edges()` is intentionally an edge helper and returns inclusive bottom/right edges for box drawing
+- panel/content helpers use shape form because that is the more natural API for layout-style calculations
+
+Practical internal preference:
+
+- helpers used directly from window/layout-style operations should prefer `*_shape`
+- helpers used as low-level clipping or conversion primitives may use `*_extents`
+- when both forms exist, the helper name should say which one it accepts
+
+This keeps public-style drawing code close to layout arithmetic while still allowing half-open extents in lower-level clipping paths.
+
+The point is not to invent more naming. The point is to make the coordinate model obvious at the call site.
 
 ## 8. Resize model
 
