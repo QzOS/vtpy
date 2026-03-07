@@ -31,6 +31,8 @@ from lc_window import (
     lc_wput,
     lc_wtouchline,
     lc_wtouchwin,
+    lc_winsdelln,
+    lc_wscrl,
 )
 
 
@@ -391,6 +393,18 @@ def lc_touchwin() -> int:
     if lc.stdscr is None:
         return -1
     return lc_wtouchwin(lc.stdscr)
+
+
+def lc_insdelln(n: int) -> int:
+    if lc.stdscr is None:
+        return -1
+    return lc_winsdelln(lc.stdscr, n)
+
+
+def lc_scrl(n: int) -> int:
+    if lc.stdscr is None:
+        return -1
+    return lc_wscrl(lc.stdscr, n)
 
 
 def lc_center_x(width: int, text: str) -> int:

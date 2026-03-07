@@ -632,6 +632,103 @@ def lc_wtouchwin(win: Optional[LCWin]) -> int:
     return 0
 
 
+def _copy_row_span_values(
+    win: LCWin,
+    dst_y: int,
+    src_y: int,
+    start: int,
+    end: int,
+) -> None:
+    # Copy cell values only.
+    # Do not replace row objects or row line lists; shared-backing subwindows
+    # rely on stable aliasing of the underlying cell objects.
+    if dst_y == src_y or start >= end:
+        return
+
+    dst_ln = win.lines[dst_y]
+    src_ln = win.lines[src_y]
+
+    for x in range(start, end):
+        dst_ln.line[x].ch = src_ln.line[x].ch
+        dst_ln.line[x].attr = src_ln.line[x].attr
+
+
+def _blank_row_span(
+    win: LCWin,
+    y: int,
+    start: int,
+    end: int,
+    attr: int = LC_ATTR_NONE,
+) -> None:
+    if start >= end:
+        return
+
+    ln = win.lines[y]
+    for x in range(start, end):
+        ln.line[x].ch = ' '
+        ln.line[x].attr = attr
+
+
+def _shift_rows_in_window(
+    win: Optional[LCWin],
+    top: int,
+    bottom: int,
+    n: int,
+    fill_attr: int = LC_ATTR_NONE,
+) -> int:
+    # Shift row content within [top, bottom) across the full local width.
+    #
+    # Sign convention:
+    #   n > 0: move content down by n rows, blank newly exposed rows at top
+    #   n < 0: move content up by -n rows, blank newly exposed rows at bottom
+    #
+    # This is content movement, not row-structure movement. LCRow objects and
+    # row line lists remain stable so shared-backing subwindows preserve their
+    # aliasing model.
+    if _require_live_window(win) != 0:
+        return -1
+    if top < 0 or bottom < 0 or top > bottom:
+        return -1
+    if top >= win.maxy:
+        return 0
+    if bottom > win.maxy:
+        bottom = win.maxy
+    if top >= bottom:
+        return 0
+    if n == 0:
+        return 0
+
+    span_h = bottom - top
+    width = win.maxx
+    if width <= 0:
+        return 0
+
+    if n >= span_h or n <= -span_h:
+        for y in range(top, bottom):
+            _blank_row_span(win, y, 0, width, fill_attr)
+        _mark_window_dirty_rows(win, top, bottom, 0, width)
+        return 0
+
+    if n > 0:
+        # Move downward. Copy bottom-up for overlap safety.
+        for dst_y in range(bottom - 1, top + n - 1, -1):
+            src_y = dst_y - n
+            _copy_row_span_values(win, dst_y, src_y, 0, width)
+        for y in range(top, top + n):
+            _blank_row_span(win, y, 0, width, fill_attr)
+    else:
+        count = -n
+        # Move upward. Copy top-down for overlap safety.
+        for dst_y in range(top, bottom - count):
+            src_y = dst_y + count
+            _copy_row_span_values(win, dst_y, src_y, 0, width)
+        for y in range(bottom - count, bottom):
+            _blank_row_span(win, y, 0, width, fill_attr)
+
+    _mark_window_dirty_rows(win, top, bottom, 0, width)
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Clipped drawing/fill family
 #
@@ -708,6 +805,31 @@ def lc_wfill(
         return 0
     fill_rect(win, y, x, y + height, x + width, outch, attr)
     return 0
+
+
+def lc_winsdelln(win: Optional[LCWin], n: int) -> int:
+    # Insert/delete lines relative to the current cursor row.
+    # n > 0 inserts blank lines at cury, shifting existing content down.
+    # n < 0 deletes lines at cury, shifting lower content up.
+    if _require_live_window(win) != 0:
+        return -1
+    if not _cursor_writable(win):
+        return -1
+    if n == 0:
+        return 0
+
+    return _shift_rows_in_window(win, win.cury, win.maxy, n, LC_ATTR_NONE)
+
+
+def lc_wscrl(win: Optional[LCWin], n: int) -> int:
+    # Scroll the full window.
+    # Positive n scrolls content up; negative n scrolls content down.
+    if _require_live_window(win) != 0:
+        return -1
+    if n == 0:
+        return 0
+
+    return _shift_rows_in_window(win, 0, win.maxy, -n, LC_ATTR_NONE)
 
 
 # ---------------------------------------------------------------------------

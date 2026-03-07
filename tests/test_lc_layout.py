@@ -4,8 +4,11 @@ from lc_screen import (
     lc_draw_box,
     lc_draw_hline,
     lc_draw_vline,
+    lc_move,
     lc_touchline,
     lc_touchwin,
+    lc_insdelln,
+    lc_scrl,
     lc_addstr_attr,
 )
 from lc_term import LC_ATTR_NONE, LC_ATTR_BOLD
@@ -131,5 +134,28 @@ def test_touch_wrappers_require_stdscr():
     try:
         assert lc_touchline(0, 1) == -1
         assert lc_touchwin() == -1
+        assert lc_insdelln(1) == -1
+        assert lc_scrl(1) == -1
+    finally:
+        lc.stdscr = old_stdscr
+
+
+def test_insdelln_and_scrl_forward_to_stdscr_window_ops():
+    old_stdscr = lc.stdscr
+    win = lc_new(4, 3, 0, 0)
+    lc.stdscr = win
+    try:
+        for y in range(win.maxy):
+            for x in range(win.maxx):
+                win.lines[y].line[x].ch = str(y)
+
+        assert lc_move(1, 0) == 0
+        assert lc_insdelln(1) == 0
+        assert ''.join(c.ch for c in win.lines[1].line) == '   '
+        assert ''.join(c.ch for c in win.lines[2].line) == '111'
+
+        assert lc_scrl(1) == 0
+        assert ''.join(c.ch for c in win.lines[0].line) == '   '
+        assert ''.join(c.ch for c in win.lines[1].line) == '111'
     finally:
         lc.stdscr = old_stdscr

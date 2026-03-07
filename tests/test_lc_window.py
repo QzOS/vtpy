@@ -15,6 +15,8 @@ from lc_window import (
     lc_wdraw_box,
     lc_wtouchline,
     lc_wtouchwin,
+    lc_winsdelln,
+    lc_wscrl,
     lc_invalidate_children,
 )
 from lc_term import LC_ATTR_NONE, LC_ATTR_BOLD, LC_DIRTY
@@ -493,3 +495,117 @@ def test_lc_wtouchline_propagates_to_parent_chain():
 def test_lc_wtouch_apis_reject_invalid_windows():
     assert lc_wtouchline(None, 0, 1) == -1
     assert lc_wtouchwin(None) == -1
+
+
+
+def test_lc_winsdelln_inserts_blank_lines_from_cursor_row():
+    win = lc_new(4, 3, 0, 0)
+    assert win is not None
+
+    for y in range(win.maxy):
+        for x in range(win.maxx):
+            win.lines[y].line[x].ch = str(y)
+
+    assert lc_wmove(win, 1, 0) == 0
+    assert lc_winsdelln(win, 1) == 0
+
+    assert _row_text(win, 0) == "000"
+    assert _row_text(win, 1) == "   "
+    assert _row_text(win, 2) == "111"
+    assert _row_text(win, 3) == "222"
+
+
+def test_lc_winsdelln_deletes_lines_from_cursor_row():
+    win = lc_new(4, 3, 0, 0)
+    assert win is not None
+
+    for y in range(win.maxy):
+        for x in range(win.maxx):
+            win.lines[y].line[x].ch = str(y)
+
+    assert lc_wmove(win, 1, 0) == 0
+    assert lc_winsdelln(win, -2) == 0
+
+    assert _row_text(win, 0) == "000"
+    assert _row_text(win, 1) == "333"
+    assert _row_text(win, 2) == "   "
+    assert _row_text(win, 3) == "   "
+
+
+def test_lc_wscrl_positive_moves_content_up_negative_moves_content_down():
+    win = lc_new(4, 3, 0, 0)
+    assert win is not None
+
+    for y in range(win.maxy):
+        for x in range(win.maxx):
+            win.lines[y].line[x].ch = str(y)
+
+    assert lc_wscrl(win, 1) == 0
+    assert _row_text(win, 0) == "111"
+    assert _row_text(win, 1) == "222"
+    assert _row_text(win, 2) == "333"
+    assert _row_text(win, 3) == "   "
+
+    assert lc_wscrl(win, -1) == 0
+    assert _row_text(win, 0) == "   "
+    assert _row_text(win, 1) == "111"
+    assert _row_text(win, 2) == "222"
+    assert _row_text(win, 3) == "333"
+
+
+def test_lc_winsdelln_large_magnitude_blanks_affected_region():
+    win = lc_new(4, 3, 0, 0)
+    assert win is not None
+
+    for y in range(win.maxy):
+        for x in range(win.maxx):
+            win.lines[y].line[x].ch = str(y)
+
+    assert lc_wmove(win, 2, 0) == 0
+    assert lc_winsdelln(win, 9) == 0
+
+    assert _row_text(win, 0) == "000"
+    assert _row_text(win, 1) == "111"
+    assert _row_text(win, 2) == "   "
+    assert _row_text(win, 3) == "   "
+
+
+def test_lc_winsdelln_preserves_subwindow_backing_aliasing():
+    root = lc_new(5, 4, 0, 0)
+    assert root is not None
+    sub = lc_subwin(root, 3, 4, 1, 0)
+    assert sub is not None
+
+    root_row_ids = [id(ln) for ln in root.lines]
+    sub_row_ids = [id(ln) for ln in sub.lines]
+
+    assert lc_wmove(sub, 1, 0) == 0
+    assert lc_winsdelln(sub, -1) == 0
+
+    assert [id(ln) for ln in root.lines] == root_row_ids
+    assert [id(ln) for ln in sub.lines] == sub_row_ids
+
+
+def test_lc_winsdelln_subwindow_only_affects_subwindow_region_in_root():
+    root = lc_new(5, 6, 0, 0)
+    assert root is not None
+    sub = lc_subwin(root, 3, 2, 1, 2)
+    assert sub is not None
+
+    for y in range(root.maxy):
+        for x in range(root.maxx):
+            root.lines[y].line[x].ch = chr(ord('A') + y)
+
+    assert lc_wmove(sub, 1, 0) == 0
+    assert lc_winsdelln(sub, -1) == 0
+
+    assert _row_text(root, 0) == "AAAAAA"
+    assert _row_text(root, 1) == "BBBBBB"
+    assert _row_text(root, 2) == "CCDDCC"
+    assert _row_text(root, 3) == "DD  DD"
+    assert _row_text(root, 4) == "EEEEEE"
+
+
+def test_lc_winsdelln_and_wscrl_reject_invalid_windows():
+    assert lc_winsdelln(None, 1) == -1
+    assert lc_wscrl(None, 1) == -1

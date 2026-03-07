@@ -213,6 +213,26 @@ That means:
 
 This is the current intended contract.
 
+### Vertical line-shift semantics
+
+The window layer also supports vertical content shifting.
+
+- `lc_winsdelln(win, n)` operates from the current cursor row to the bottom of
+  that window.
+- `n > 0` inserts `n` blank lines at the cursor row and shifts existing content
+  downward.
+- `n < 0` deletes `-n` lines at the cursor row and shifts lower content upward.
+- `lc_wscrl(win, n)` scrolls the full window contents.
+- positive scroll values move content upward; negative values move content
+  downward.
+
+Implementation rule:
+
+- line shifting is defined as cell-content movement within the window backing
+  area
+- it is not defined as rebinding, rotating, or replacing row objects
+- this preserves shared-backing subwindow aliasing semantics
+
 ### Strict operations
 
 These are strict and return `-1` on invalid coordinates:
