@@ -263,15 +263,28 @@ def ui_view_set_fill(view: Optional[UIView], ch: str, attr: int = LC_ATTR_NONE) 
     return 0
 
 
+def _ui_view_is_ancestor(ancestor: Optional[UIView], view: Optional[UIView]) -> bool:
+    cur = view
+    while cur is not None:
+        if cur is ancestor:
+            return True
+        cur = cur.parent
+    return False
+
+
 def ui_view_add_child(parent: Optional[UIView], child: Optional[UIView]) -> int:
     if parent is None or child is None:
         return -1
+    if parent is child:
+        return -1
     if child.parent is not None:
+        return -1
+    if _ui_view_is_ancestor(child, parent):
         return -1
 
     child.parent = parent
     parent.children.append(child)
-    parent.set_dirty()
+    ui_view_mark_dirty(parent)
     return 0
 
 
@@ -286,7 +299,7 @@ def ui_view_remove_child(parent: Optional[UIView], child: Optional[UIView]) -> i
     parent.children.remove(child)
     child.parent = None
     child.set_dirty()
-    parent.set_dirty()
+    ui_view_mark_dirty(parent)
     return 0
 
 
@@ -397,9 +410,7 @@ def ui_view_layout_children(view: Optional[UIView]) -> int:
         return ui_layout_stack_vertical(view.content_rect, view.children, view.layout_gap)
 
     for child in view.children:
-        child.frame_rect = ui_rect(
-            child.frame_rect.y, child.frame_rect.x, child.frame_rect.height, child.frame_rect.width
-        )
+        child.frame_rect = ui_rect_copy(child.frame_rect)
         child.content_rect = ui_rect_copy(child.frame_rect)
 
     return 0
@@ -566,7 +577,6 @@ def _ui_draw_text_line(
 ) -> int:
     x = 0
     clipped = ""
-    i = 0
 
     if win is None:
         return -1
@@ -578,9 +588,9 @@ def _ui_draw_text_line(
         return 0
 
     x = _ui_text_align_x(width, clipped, align)
-    for i, ch in enumerate(clipped):
-        if lc_wmove(win, y, x + i) != 0:
-            return -1
+    if lc_wmove(win, y, x) != 0:
+        return -1
+    for ch in clipped:
         if lc_wput(win, ord(ch), attr) != 0:
             return -1
     return 0
@@ -610,15 +620,21 @@ def _ui_draw_text_block(
     return 0
 
 
+def _ui_view_fill_background(view: UIView, r: UIRect) -> int:
+    if view.bound_win is None:
+        return -1
+    if ui_rect_is_empty(r):
+        return 0
+    if view.fill_ch:
+        return lc_wfill(view.bound_win, 0, 0, r.height, r.width, view.fill_ch, view.fill_attr)
+    return lc_wclear(view.bound_win)
+
+
 def _ui_view_draw_label(view: UIView) -> int:
     r = ui_view_draw_rect(view)
 
-    if view.fill_ch:
-        if lc_wfill(view.bound_win, 0, 0, r.height, r.width, view.fill_ch, view.fill_attr) != 0:
-            return -1
-    else:
-        if lc_wclear(view.bound_win) != 0:
-            return -1
+    if _ui_view_fill_background(view, r) != 0:
+        return -1
 
     return _ui_draw_text_block(view.bound_win, r, view.text, view.text_attr, view.text_align)
 
@@ -646,9 +662,7 @@ def _ui_view_draw_container(view: UIView) -> int:
         return -1
     if ui_rect_is_empty(r):
         return 0
-    if view.fill_ch:
-        return lc_wfill(view.bound_win, 0, 0, r.height, r.width, view.fill_ch, view.fill_attr)
-    return lc_wclear(view.bound_win)
+    return _ui_view_fill_background(view, r)
 
 
 def ui_view_draw_self(view: Optional[UIView], ctx: Optional[UIDrawContext] = None) -> int:
