@@ -1,0 +1,1457 @@
+diff --git a/README.md b/README.md
+index c02c4a8b2e6db01f74c8908b01e05af469529c4d..6c7821e9e60b7e5c2c8ef331a6636dcadb5aa90d 100644
+--- a/README.md
++++ b/README.md
+@@ -1,56 +1,56 @@
+ # vtpy README
+ 
+-## 1. What this library is
++## 1. Scope
+ 
+-vtpy is a Python terminal library built around a simple idea:
++vtpy is a Python terminal library with a deliberately explicit architecture:
+ 
+-- terminal I/O is a byte stream plus a character-cell screen model
++- terminal I/O is modeled as a byte stream plus a character-cell screen
+ - rendering is explicit and diff-based
+ - input decoding is explicit and protocol-aware
+-- platform-specific terminal control belongs in backends
++- terminal control is backend-owned
+ - higher-level semantics belong in OS-neutral core code
+-- reference design for a future OS-native text ui runtime
++- the codebase is intended to remain a plausible reference shape for a future OS-native text UI runtime
+ 
+ This is not a wrapper around curses.
+-This is not trying to pretend ncurses history never happened either.
+-The point is to build a terminal library with clear internal contracts, modern enough to live comfortably in VT/xterm-style terminals, and structured so that POSIX and Windows can both exist under the same core model.
++It also does not pretend ncurses and terminal history do not exist.
++The goal is a terminal library with explicit internal contracts, a modern VT/xterm-oriented model, and a structure in which POSIX and Windows can live under the same core semantics.
+ 
+-## 2. What this library is not
++## 2. Non-goals
+ 
+ At the current stage, vtpy is not:
+ 
+ - a drop-in curses clone
+ - a full terminal capability database
+ - a Unicode-width-correct rendering engine
+ - a widget toolkit
+ - a portability layer for arbitrary historical terminals
+ - a complete window hierarchy system
+ 
+ Those may become future directions, but they are not current promises.
+ 
+-## 3. Current architecture
++## 3. Architecture
+ 
+ The codebase is split into two broad layers.
+ 
+ ### 3.1 OS-neutral core
+ 
+ These modules define the main behavior of the library:
+ 
+ - `lc_window.py` - in-memory window and cell model, dirty tracking, drawing primitives
+ - `lc_refresh.py` - diff-based screen refresh and batching
+ - `lc_keys.py` - input parser from byte stream to chars/keysyms
+ - `lc_term.py` - VT/ANSI sequence encoding and terminal-output helpers
+ - `lc_screen.py` - public API and overall state orchestration
+ 
+ These modules should not depend on POSIX or Win32 details except through the backend contract.
+ 
+ ### 3.2 Platform backends
+ 
+ These modules own platform-specific terminal control:
+ 
+ - `_posix.py`
+ - `_win.py`
+ - `lc_platform.py` chooses the active backend
+ 
+ Backends are responsible for:
+ 
+@@ -119,123 +119,122 @@ Required functions:
+ - `get_size(state) -> (rows, cols)`
+ - `read_byte(state) -> int | None`
+ - `unread_byte(state, ch) -> None`
+ - `input_pending(state, timeout_ms) -> bool`
+ - `poll_resize(state) -> bool`
+ - `clear_resize(state) -> None`
+ - `apply_term(state) -> int`
+ - `raw(state) -> int`
+ - `noraw(state) -> int`
+ - `cbreak(state) -> int`
+ - `nocbreak(state) -> int`
+ - `echo(state) -> int`
+ - `noecho(state) -> int`
+ 
+ ### Backend semantic rules
+ 
+ - `read_byte()` returns one byte-equivalent integer in range `0..255`, or `None` on EOF/error/unavailable terminal failure.
+ - `unread_byte()` provides one-byte pushback semantics.
+ - `input_pending()` means keyboard/input-byte readiness only. A pending resize alone must not make it return `True`.
+ - `poll_resize()` means a real terminal size change is pending observation by the core.
+ - `clear_resize()` clears backend resize state after the core has consumed it.
+ - Backends must not leak platform-specific input events into the core except as byte stream plus resize notification.
+ 
+ ### Backend semantic consequences
+ 
+-This means:
++Practical consequences:
+ 
+ - UTF-8 decoding belongs above the backend
+ - VT/CSI/SS3 parsing belongs above the backend
+ - Windows-specific key events must be translated into byte-stream-compatible form where practical
+ - POSIX stays raw-byte-oriented
+ 
+ ## 5.2 Screen/state contract
+ 
+ `lc_screen.py` owns the public mutable runtime state.
+ 
+ This state is responsible for coordinating:
+ 
+ - active screen size
+ - current stdscr window
+ - render cache
+ - current cursor/attr output state
+ - input settings such as ESC delay, nodelay, meta handling
+ 
+ The public API should remain platform-neutral.
+ 
+ ## 5.3 Window semantics contract
+ 
+ The window layer owns logical drawing semantics.
+ 
+ ### Root identity rule
+ 
+ Every live window has a non-`None` `root`.
+ 
+ That means:
+ 
+ - for a top-level window, `root is self`
+ - for a derived window, `root` names the top-level backing root
+ - `parent is None` means the window is top-level
+ - `root is self` means the window is the top-level root object for its current backing topology
+ - dead windows clear `root`
+ 
+-### Cursor progression rule
++### Cursor progression
+ 
+ The current cursor policy is saturating at the last writable cell.
+ 
+ That means:
+ 
+ - writing at any non-final cell advances normally
+ - writing at the final cell succeeds
+ - after a successful write at the final cell, the cursor remains at that cell
+ - subsequent writes continue to target that same final cell unless the application moves the cursor
+ 
+ This is intentional.
+ The library does not currently expose a public end-of-window sentinel state through
+-`cury` / `curx`.
++`cury`/`curx`.
+ 
+ Single-cell and bulk text writes are expected to obey the same final-cell rule.
+ 
+-
+-### Cursor-driven write completion rule
++### Cursor-driven write completion
+ 
+ Cursor-driven writes are intentionally prefix-success operations, not atomic
+ all-or-nothing operations.
+ 
+ That means:
+ 
+ - `lc_wput()` writes one character at the current cursor if the cursor is valid
+ - `lc_waddstr()` writes as much of the string as fits under the current
+   saturating cursor policy
+ - if the cursor reaches the final writable cell during a bulk write, that final
+   cell is written and the operation returns success
+ - any remaining suffix that would require a public end-of-window sentinel state
+   is not written
+ 
+ This is the current intended contract.
+ 
+-### Vertical line-shift semantics
++### Vertical line shifting
+ 
+ The window layer also supports vertical content shifting.
+ 
+ - `lc_winsdelln(win, n)` operates from the current cursor row to the bottom of
+   that window.
+ - `n > 0` inserts `n` blank lines at the cursor row and shifts existing content
+   downward.
+ - `n < 0` deletes `-n` lines at the cursor row and shifts lower content upward.
+ - `lc_wscrl(win, n)` scrolls the full window contents.
+ - positive scroll values move content upward; negative values move content
+   downward.
+ 
+ Implementation rule:
+ 
+ - line shifting is defined as cell-content movement within the window backing
+   area
+ - it is not defined as rebinding, rotating, or replacing row objects
+ - this preserves shared-backing subwindow aliasing semantics
+ 
+ ### Strict operations
+ 
+ These are strict and return `-1` on invalid coordinates:
+ 
+ - `lc_wmove()`
+ - APIs that depend on an already-valid cursor and cannot sensibly clip from nowhere
+@@ -402,112 +401,112 @@ The desired screen is global physical-screen intent, not per-window intent.
+ That means:
+ 
+ - `lc_wnoutrefresh()` is ordering-sensitive
+ - if multiple windows stage overlapping regions, the later staged window wins
+   for those cells in the desired screen
+ - applications that need fully coherent shared-backing presentation should
+   still prefer staging the root window
+ 
+ ### Resize interaction for staged refresh
+ 
+ `lc_doupdate()` is a flush step, not a window-topology rebuild source.
+ 
+ That means:
+ 
+ - if a resize rebuild is observed before `lc_doupdate()` flushes output, the
+   previously staged desired-screen content is discarded
+ - applications must rebuild any derived windows and restage against the rebuilt
+   topology before the next flush
+ 
+ ## 6. Current text model
+ 
+ The current text/input/rendering model is deliberately simple.
+ 
+ ### Current truth
+ 
+-- input arrives as bytes
++- input arrives as raw bytes
+ - UTF-8 is decoded in `lc_keys.py`
+ - cells currently store a Python `str` character
+ - rendering uses `str.encode('utf-8', 'replace')`
+ - screen advancement is still effectively one stored character per cell
+ 
+ ### What is not solved yet
+ 
+ The library does not yet have a final answer for:
+ 
+ - wide characters
+ - combining characters
+ - grapheme clusters
+ - true display-width accounting
+ 
+ This is an intentional simplification for now. The current practical assumption is close to:
+ 
+ - one stored character occupies one logical cell
+ 
+ That assumption will eventually need revision if the library moves toward serious Unicode layout correctness.
+ 
+ ## 7. Current clipping/geometry helpers
+ 
+ Internal geometry helpers now exist to make future semantics less ad hoc:
+ 
+ - `_clip_range()`
+ - `_clip_hspan()`
+ - `_clip_vspan()`
+ - `_clip_rect()`
+ - `_normalize_rect()`
+ - `_box_edges()`
+ - `_interior_rect()`
+ 
+ These are internal for now. They exist to give names to recurring rectangle logic and reduce repeated coordinate arithmetic.
+ 
+ The purpose is not abstraction for abstraction's sake. The purpose is to make later steps, such as titled boxes, content rects, and subwindow clipping, easier to implement without duplicating geometry logic in multiple public functions.
+ 
+ ## 8. Resize model
+ 
+-Resize is modeled as an event-like condition surfaced through the backend and consumed by the core.
++Resize is treated as an event-like condition surfaced through the backend and consumed by the core.
+ 
+ ### Current flow
+ 
+ - backend notices resize
+ - backend reports `poll_resize() == True`
+ - a refresh call may observe that resize before emitting output
+ - core checks actual size
+ - core rebuilds stdscr and cached screen state
+ - core invalidates all derived windows from the old topology
+ - key layer emits `LC_KEY_RESIZE`
+ 
+ Applications must rebuild any derived windows after that point before using
+ them again, including for explicit refresh calls.
+ 
+ ### Important rule
+ 
+ A resize is not treated as input-byte readiness.
+ That is why `input_pending()` must not become `True` merely because a resize happened.
+ 
+ ## 9. What is currently stable enough to rely on
+ 
+-These parts are stable enough to be treated as the current intended model:
++These parts are stable enough to treat as the current intended model:
+ 
+ - byte-oriented backend interface
+ - screen/state/backend separation
+ - diff-based refresh model
+ - dirty row/cell repainting
+ - clipped drawing primitives
+ - resize surfaced as `LC_KEY_RESIZE`
+ - root-oriented refresh coherence for shared-backing windows
+ - live-window root identity (`root is self` for top-level windows)
+ - explicit resize invalidate/rebuild/replace flow
+ - shared-backing subwindows with upward dirty propagation
+ - panel-content subwindow helpers
+ 
+ ## 10. What is still in motion
+ 
+ These areas are still under active design and should not yet be treated as frozen API truth:
+ 
+ - Unicode cell-width semantics
+ - whether derived-window refresh should remain limited or become fully coherent across shared aliases
+ - whether future window types should include copied-backing windows in addition to shared-backing subwindows
+ - how far internal bulk/span helper consolidation should go
+ - whether future write families should be separated more explicitly in the public API
+ - richer panel/header/content zoning
+ - richer attribute and color model
+ - broader terminal capability modeling beyond current VT-oriented assumptions
+@@ -587,77 +586,76 @@ It is an architectural layer that establishes where future UI behavior belongs.
+ ### 14.1 Intended responsibility split
+ 
+ - `lc_*` modules remain the terminal/core/runtime substrate
+ - `ui_event.py` translates runtime input into UI-facing events and commands
+ - `ui_view.py` defines logical view identity and tree semantics
+ - `ui_layout.py` owns logical rect/layout policy
+ - `ui_runtime.py` coordinates focus, dispatch, rebinding and redraw passes
+ 
+ ### 14.2 Important design rule
+ 
+ A future logical UI view must not be identified by a concrete `LCWin`.
+ 
+ Instead:
+ 
+ - a `UIView` is the stable logical node
+ - a bound `LCWin` is a runtime drawing resource
+ - that binding may be rebuilt after resize or layout changes
+ 
+ This keeps the future UI layer compatible with resize-driven subwindow invalidation.
+ 
+ ### 14.3 Root binding rule
+ 
+ The root `UIView` binds directly to `stdscr`.
+ 
+ It is not treated as a synthetic panel and is not bound through a fake
+-panel-content subwindow. This keeps the model honest:
++panel-content subwindow. This keeps the model explicit:
+ 
+ - root layout is a logical UI concern
+ - root binding is a runtime concern
+ - panel/content semantics belong only to views that actually choose panel-like
+   layout or framing
+ 
+ This is the baseline for future frame/content zoning and widget composition.
+ 
+ ### 15. C portability
+ A future C port remains a design goal, but it is not the primary constraint on the current Python codebase.
+ 
+ The current rule is:
+ 
+ - keep core data flow, contracts, and ownership models compatible with a plausible C translation
+ - prefer explicit state and explicit control flow where it improves clarity
+ - avoid Python features that would blur ownership, hidden control transfer, or data shape
+ - do not contort clear Python code merely to imitate C syntax or C limitations prematurely
+ 
+ In practice, this means:
+ 
+ - backend/core/parser/window boundaries should stay explicit
+ - public operations should continue to use simple success/failure style where practical
+ - runtime state should remain concrete and inspectable
+ - data models should remain straightforward rather than dynamically magical
+ 
+ It does not mean that every current Python module must already look like literal C.
+ 
+ At this stage, readable and well-structured Python is more important than forcing the implementation into an artificial C-like subset too early. If and when a real C port begins, the project can tighten the portability rules around the parts that are actually being translated.
+ 
+ ### Current portability preference
+ 
+ When writing core code, it is still useful to ask:
+ 
+ > can this logic be expressed later as a C function operating on explicit state?
+ 
+ But that is a design preference, not a hard gate on every line of Python today.
+ 
+ ### What to avoid even now
+ 
+ Even before any C port exists, we should still avoid patterns that weaken the architecture:
+ 
+ - hidden global side effects outside the runtime/state model
+ - unclear ownership or lifecycle
+ - implicit cross-layer dependencies
+ - parser/backend mixing
+ - convenience abstractions that obscure terminal semantics
+ - accidental semantic broadening that is not documented
+ 
+-The goal is not "Python written as fake C".
+-The goal is "clean Python with contracts that can survive a later systems-language port".
+-
++The goal is not “Python written as fake C”.
++The goal is “clean Python with contracts that can survive a later systems-language port”.
+diff --git a/lc_refresh.py b/lc_refresh.py
+index 450d5c2c21135204b3abbcf0a03449b38a50eabf..2a51207b2147e3fbbea5bcef08b5b44c0a92646d 100644
+--- a/lc_refresh.py
++++ b/lc_refresh.py
+@@ -18,58 +18,68 @@ def _reinit_physical_cache() -> None:
+     lc.term.reset_state()
+     lc.cur_attr = LC_ATTR_NONE
+ 
+ 
+ def _reinit_virtual_cache() -> None:
+     lc.vscreen = [
+         [LCCell(' ', LC_ATTR_NONE) for _x in range(lc.cols)]
+         for _y in range(lc.lines)
+     ]
+     lc.vdirty_first = [-1 for _ in range(lc.lines)]
+     lc.vdirty_last = [-1 for _ in range(lc.lines)]
+     lc.virtual_cur_y = 0
+     lc.virtual_cur_x = 0
+     lc.virtual_cursor_valid = False
+ 
+ 
+ def _mark_full_virtual_dirty() -> None:
+     if lc.lines <= 0 or lc.cols <= 0:
+         return
+ 
+     for abs_y in range(lc.lines):
+         lc.vdirty_first[abs_y] = 0
+         lc.vdirty_last[abs_y] = lc.cols - 1
+ 
+ 
++def _cache_has_shape(cache: list[list[LCCell]], rows: int, cols: int) -> bool:
++    if len(cache) != rows:
++        return False
++    if rows == 0:
++        return True
++    return all(len(row) == cols for row in cache)
++
++
+ def _ensure_virtual_cache_shape() -> None:
+-    if len(lc.vscreen) != lc.lines or (lc.lines > 0 and len(lc.vscreen[0]) != lc.cols):
++    if not _cache_has_shape(lc.vscreen, lc.lines, lc.cols):
+         _reinit_virtual_cache()
+ 
+ 
+ def _dirty_span_for_row(win: LCWin, ln: LCRow, abs_y: int) -> tuple[int, int]:
+     if abs_y < 0 or abs_y >= lc.lines:
+         return 0, 0
++    if not (ln.flags & LC_DIRTY):
++        return 0, 0
+ 
+     start_x = max(0, int(ln.firstch))
+     end_x = min(win.maxx, int(ln.lastch) + 1)
+ 
+     if start_x >= end_x:
+         return 0, 0
+ 
+     return start_x, end_x
+ 
+ 
+ def _clear_row_dirty(ln: LCRow) -> None:
+     ln.firstch = 0
+     ln.lastch = 0
+     ln.flags = 0
+ 
+ 
+ def _mark_virtual_dirty(abs_y: int, start_x: int, end_x: int) -> None:
+     if abs_y < 0 or abs_y >= lc.lines:
+         return
+     if start_x >= end_x:
+         return
+ 
+     if lc.vdirty_first[abs_y] < 0:
+         lc.vdirty_first[abs_y] = start_x
+         lc.vdirty_last[abs_y] = end_x - 1
+@@ -177,51 +187,51 @@ def _resolve_refresh_window(win: Optional[LCWin]) -> tuple[int, Optional[LCWin]]
+     if rc == 1:
+         # A root resize invalidates all derived windows. Do not silently
+         # replace an explicitly requested derived window with stdscr.
+         #
+         # After a rebuild:
+         #   - derived windows from the old topology must fail refresh
+         #   - an explicit refresh of the old root may fall through to rebuilt stdscr
+         if not requested_is_root:
+             return -1, None
+         win = lc.stdscr
+ 
+     if win is None or not win.alive:
+         return -1, None
+ 
+     return 0, win
+ 
+ 
+ def lc_wnoutrefresh(win: Optional[LCWin]) -> int:
+     # Stage the dirty visible portion of a window into the global desired
+     # screen. This does not write terminal output. Later staged windows may
+     # overwrite earlier desired content in overlapping regions.
+     rc, win = _resolve_refresh_window(win)
+     if rc != 0 or win is None:
+         return -1
+ 
+-    if len(lc.vscreen) != lc.lines or (lc.lines > 0 and len(lc.vscreen[0]) != lc.cols):
++    if not _cache_has_shape(lc.vscreen, lc.lines, lc.cols):
+         _reinit_virtual_cache()
+ 
+     for y in range(win.maxy):
+         abs_y = win.begy + y
+         if abs_y < 0 or abs_y >= lc.lines:
+             continue
+ 
+         ln = win.lines[y]
+         if not (ln.flags & LC_DIRTY):
+             continue
+ 
+         start_x, end_x = _dirty_span_for_row(win, ln, abs_y)
+         if start_x >= end_x:
+             _clear_row_dirty(ln)
+             continue
+ 
+         row_changed = False
+ 
+         for x in range(start_x, end_x):
+             abs_x = win.begx + x
+             if abs_x < 0 or abs_x >= lc.cols:
+                 continue
+ 
+             src = ln.line[x]
+             dst = lc.vscreen[abs_y][abs_x]
+@@ -239,51 +249,51 @@ def lc_wnoutrefresh(win: Optional[LCWin]) -> int:
+         _clear_row_dirty(ln)
+ 
+     final_y = win.begy + win.cury
+     final_x = win.begx + win.curx
+     if 0 <= final_y < lc.lines and 0 <= final_x < lc.cols:
+         lc.virtual_cur_y = final_y
+         lc.virtual_cur_x = final_x
+         lc.virtual_cursor_valid = True
+     else:
+         lc.virtual_cursor_valid = False
+ 
+     return 0
+ 
+ 
+ def lc_doupdate() -> int:
+     # Two-phase flush must not emit stale staged geometry across a resize
+     # rebuild. If a rebuild occurred, stdscr has already been replaced and any
+     # derived topology must be rebuilt and restaged by the application.
+     rc = lc_check_resize()
+     if rc < 0:
+         return -1
+     if rc == 1:
+         return 0
+ 
+     physical_reinit = False
+-    if len(lc.screen) != lc.lines or (lc.lines > 0 and len(lc.screen[0]) != lc.cols):
++    if not _cache_has_shape(lc.screen, lc.lines, lc.cols):
+         _reinit_physical_cache()
+         physical_reinit = True
+ 
+     _ensure_virtual_cache_shape()
+ 
+     # If the physical cache was reinitialized, the terminal was logically
+     # cleared. The full desired screen must therefore be considered dirty.
+     if physical_reinit:
+         _mark_full_virtual_dirty()
+ 
+     out = bytearray()
+ 
+     for abs_y in range(lc.lines):
+         first = lc.vdirty_first[abs_y]
+         last = lc.vdirty_last[abs_y]
+         if first < 0 or last < first:
+             continue
+ 
+         start_x = first
+         end_x = last + 1
+         run_start_x = -1
+         run_cells: list[LCCell] = []
+ 
+         for abs_x in range(start_x, end_x):
+             cell = lc.vscreen[abs_y][abs_x]
+diff --git a/lc_screen.py b/lc_screen.py
+index 62263af394ff0a0a27af1b32f1ab3838fd29823b..6d9a66ac2905b40be9f19766fc931c3b52892875 100644
+--- a/lc_screen.py
++++ b/lc_screen.py
+@@ -59,50 +59,73 @@ class LCState:
+ 
+         # Desired virtual screen: what the next doupdate should realize.
+         self.vscreen: list[list[LCCell]] = []
+ 
+         # Dirty spans in the desired virtual screen, indexed by physical row.
+         # A value of -1 means "clean/no pending desired update".
+         self.vdirty_first: list[int] = []
+         self.vdirty_last: list[int] = []
+ 
+         self.cur_y = 0
+         self.cur_x = 0
+         self.cur_attr = LC_ATTR_NONE
+ 
+         # Cursor requested by the most recently staged window.
+         self.virtual_cur_y = 0
+         self.virtual_cur_x = 0
+         self.virtual_cursor_valid = False
+ 
+         self.resize_pending = False
+         self._prev_winch_handler = None
+ 
+ 
+ lc = LCState()
+ 
+ 
++def _reset_runtime_state() -> None:
++    lc.screen = []
++    lc.vscreen = []
++    lc.vdirty_first = []
++    lc.vdirty_last = []
++    lc.pushback_byte = None
++    lc.cur_y = 0
++    lc.cur_x = 0
++    lc.cur_attr = LC_ATTR_NONE
++    lc.virtual_cur_y = 0
++    lc.virtual_cur_x = 0
++    lc.virtual_cursor_valid = False
++    lc.lines = 0
++    lc.cols = 0
++    lc.resize_pending = False
++    lc.orig_term = None
++    lc.cur_term = None
++
++
++def _stdscr_required() -> Optional[LCWin]:
++    return lc.stdscr
++
++
+ def _reset_render_cache(rows: int, cols: int) -> None:
+     lc.screen = [
+         [LCCell(' ', LC_ATTR_NONE) for _x in range(cols)]
+         for _y in range(rows)
+     ]
+     lc.vscreen = [
+         [LCCell(' ', LC_ATTR_NONE) for _x in range(cols)]
+         for _y in range(rows)
+     ]
+     lc.vdirty_first = [-1 for _ in range(rows)]
+     lc.vdirty_last = [-1 for _ in range(rows)]
+     lc.cur_y = 0
+     lc.cur_x = 0
+     lc.cur_attr = LC_ATTR_NONE
+     lc.virtual_cur_y = 0
+     lc.virtual_cur_x = 0
+     lc.virtual_cursor_valid = False
+     lc.term.reset_state()
+ 
+ 
+ def _clamp_cursor_to_window(win: LCWin) -> None:
+     if win.maxy <= 0 or win.maxx <= 0:
+         win.cury = 0
+         win.curx = 0
+         return
+@@ -131,54 +154,51 @@ def lc_init() -> Optional[LCWin]:
+     entered_alt = False
+     try:
+         lc.term.reset_state()
+         lc.term.use_alternate_screen(True)
+         entered_alt = True
+         lc.term.set_wrap(False)
+         rc = lc_keypad(True)
+         if rc != 0:
+             raise OSError(f"lc_keypad(True) failed with return code {rc}")
+         lc.term.clear_screen()
+         lc.term.show_cursor(False)
+         _reset_render_cache(rows, cols)
+         return lc.stdscr
+     except (OSError, ValueError):
+         with suppress(OSError, ValueError):
+             lc.term.set_attr(LC_ATTR_NONE)
+             lc.term.set_wrap(True)
+             lc_keypad(False)
+             lc.term.show_cursor(True)
+             if entered_alt:
+                 lc.term.use_alternate_screen(False)
+         backend.end(lc)
+         lc.term.reset_state()
+         lc_free(lc.stdscr)
+         lc.stdscr = None
+-        _reset_render_cache(0, 0)
+-        lc.lines = 0
+-        lc.cols = 0
+-        lc.resize_pending = False
++        _reset_runtime_state()
+         return None
+ 
+ 
+ def lc_subwindow(nlines: int, ncols: int, begin_y: int, begin_x: int) -> Optional[LCWin]:
+     if lc.stdscr is None:
+         return None
+     return lc_subwin(lc.stdscr, nlines, ncols, begin_y, begin_x)
+ 
+ 
+ def lc_subwindow_from(
+     parent: Optional[LCWin],
+     nlines: int,
+     ncols: int,
+     begin_y: int,
+     begin_x: int,
+ ) -> Optional[LCWin]:
+     return lc_subwin(parent, nlines, ncols, begin_y, begin_x)
+ 
+ 
+ def lc_panel_content_subwindow(
+     y: int,
+     x: int,
+     height: int,
+     width: int,
+ ) -> Optional[LCWin]:
+@@ -198,66 +218,51 @@ def lc_panel_content_subwindow_from(
+ 
+ 
+ def lc_get_panel_content_rect(y: int, x: int, height: int, width: int) -> tuple[int, int, int, int]:
+     return lc_panel_content_rect(y, x, height, width)
+ 
+ 
+ def lc_end() -> int:
+     try:
+         with suppress(OSError, ValueError):
+             lc.term.set_attr(LC_ATTR_NONE)
+             lc.term.set_wrap(True)
+             lc_keypad(False)
+             lc.term.show_cursor(True)
+             lc.term.use_alternate_screen(False)
+             sys.stdout.flush()
+     except OSError:
+         pass
+     finally:
+         lc.term.reset_state()
+         backend.end(lc)
+ 
+         if lc.stdscr is not None:
+             lc_free(lc.stdscr)
+             lc.stdscr = None
+ 
+-        lc.screen = []
+-        lc.vscreen = []
+-        lc.vdirty_first = []
+-        lc.vdirty_last = []
+-        lc.pushback_byte = None
+-        lc.cur_y = 0
+-        lc.cur_x = 0
+-        lc.cur_attr = LC_ATTR_NONE
+-        lc.virtual_cur_y = 0
+-        lc.virtual_cur_x = 0
+-        lc.virtual_cursor_valid = False
+-        lc.lines = 0
+-        lc.cols = 0
+-        lc.resize_pending = False
+-        lc.orig_term = None
+-        lc.cur_term = None
++        _reset_runtime_state()
+     return 0
+ 
+ 
+ def _mark_all_dirty(win: LCWin) -> None:
+     for ln in win.lines:
+         ln.firstch = 0
+         if win.maxx > 0:
+             ln.lastch = win.maxx - 1
+         else:
+             ln.lastch = 0
+         ln.flags = LC_DIRTY | LC_FORCEPAINT
+ 
+ 
+ def _copy_overlap(dst: LCWin, src: LCWin) -> None:
+     copy_rows = min(src.maxy, dst.maxy)
+     copy_cols = min(src.maxx, dst.maxx)
+ 
+     for y in range(copy_rows):
+         src_ln = src.lines[y]
+         dst_ln = dst.lines[y]
+         for x in range(copy_cols):
+             dst_ln.line[x].ch = src_ln.line[x].ch
+             dst_ln.line[x].attr = src_ln.line[x].attr
+ 
+ 
+@@ -334,217 +339,235 @@ def lc_nocbreak() -> int:
+ 
+ def lc_echo() -> int:
+     return backend.echo(lc)
+ 
+ 
+ def lc_noecho() -> int:
+     return backend.noecho(lc)
+ 
+ 
+ def lc_keypad(on: bool) -> int:
+     return lc.term.set_keypad_transmit(bool(on))
+ 
+ 
+ @contextmanager
+ def lc_session():
+     win = lc_init()
+     if win is None:
+         raise RuntimeError("lc_init failed")
+     try:
+         yield win
+     finally:
+         lc_end()
+ 
+ 
+ def lc_move(y: int, x: int) -> int:
+-    if lc.stdscr is None:
++    stdscr = _stdscr_required()
++    if stdscr is None:
+         return -1
+-    if y < 0 or y >= lc.stdscr.maxy or x < 0 or x >= lc.stdscr.maxx:
++    if y < 0 or y >= stdscr.maxy or x < 0 or x >= stdscr.maxx:
+         return -1
+-    return lc_wmove(lc.stdscr, y, x)
++    return lc_wmove(stdscr, y, x)
+ 
+ 
+ def lc_put(ch: int) -> int:
+-    if lc.stdscr is None:
++    stdscr = _stdscr_required()
++    if stdscr is None:
+         return -1
+-    return lc_wput(lc.stdscr, ch, LC_ATTR_NONE)
++    return lc_wput(stdscr, ch, LC_ATTR_NONE)
+ 
+ 
+ def lc_addstr(s: str) -> int:
+-    if lc.stdscr is None:
++    stdscr = _stdscr_required()
++    if stdscr is None:
+         return -1
+     if s is None:
+         return -1
+-    return lc_waddstr(lc.stdscr, s)
++    return lc_waddstr(stdscr, s)
+ 
+ 
+ def lc_addstr_attr(s: str, attr: int) -> int:
+-    if lc.stdscr is None:
++    stdscr = _stdscr_required()
++    if stdscr is None:
+         return -1
+     if s is None:
+         return -1
+-    return lc_waddstr_attr(lc.stdscr, s, attr)
++    return lc_waddstr_attr(stdscr, s, attr)
+ 
+ 
+ def lc_mvaddstr(y: int, x: int, s: str) -> int:
+-    if lc.stdscr is None:
++    stdscr = _stdscr_required()
++    if stdscr is None:
+         return -1
+-    return lc_mvwaddstr(lc.stdscr, y, x, s)
++    return lc_mvwaddstr(stdscr, y, x, s)
+ 
+ 
+ def lc_put_attr(ch: int, attr: int) -> int:
+-    if lc.stdscr is None:
++    stdscr = _stdscr_required()
++    if stdscr is None:
+         return -1
+-    return lc_wput(lc.stdscr, ch, attr)
++    return lc_wput(stdscr, ch, attr)
+ 
+ 
+ def lc_fill(
+     y: int,
+     x: int,
+     height: int,
+     width: int,
+     ch: str = " ",
+     attr: int = LC_ATTR_NONE,
+ ) -> int:
+-    if lc.stdscr is None:
++    stdscr = _stdscr_required()
++    if stdscr is None:
+         return -1
+-    return lc_wfill(lc.stdscr, y, x, height, width, ch, attr)
++    return lc_wfill(stdscr, y, x, height, width, ch, attr)
+ 
+ 
+ def lc_touchline(y: int, n: int = 1) -> int:
+-    if lc.stdscr is None:
++    stdscr = _stdscr_required()
++    if stdscr is None:
+         return -1
+-    return lc_wtouchline(lc.stdscr, y, n)
++    return lc_wtouchline(stdscr, y, n)
+ 
+ 
+ def lc_touchwin() -> int:
+-    if lc.stdscr is None:
++    stdscr = _stdscr_required()
++    if stdscr is None:
+         return -1
+-    return lc_wtouchwin(lc.stdscr)
++    return lc_wtouchwin(stdscr)
+ 
+ 
+ def lc_insdelln(n: int) -> int:
+-    if lc.stdscr is None:
++    stdscr = _stdscr_required()
++    if stdscr is None:
+         return -1
+-    return lc_winsdelln(lc.stdscr, n)
++    return lc_winsdelln(stdscr, n)
+ 
+ 
+ def lc_scrl(n: int) -> int:
+-    if lc.stdscr is None:
++    stdscr = _stdscr_required()
++    if stdscr is None:
+         return -1
+-    return lc_wscrl(lc.stdscr, n)
++    return lc_wscrl(stdscr, n)
+ 
+ 
+ def lc_center_x(width: int, text: str) -> int:
+     if width <= 0:
+         return 0
+     if text is None:
+         return 0
+     text_len = len(text)
+     if text_len >= width:
+         return 0
+     return (width - text_len) // 2
+ 
+ 
+ def lc_draw_hline(y: int, x: int, width: int, ch: str = "-", attr: int = LC_ATTR_NONE) -> int:
+-    if lc.stdscr is None:
++    stdscr = _stdscr_required()
++    if stdscr is None:
+         return -1
+-    return lc_wdraw_hline(lc.stdscr, y, x, width, ch, attr)
++    return lc_wdraw_hline(stdscr, y, x, width, ch, attr)
+ 
+ 
+ def lc_draw_vline(y: int, x: int, height: int, ch: str = "|", attr: int = LC_ATTR_NONE) -> int:
+-    if lc.stdscr is None:
++    stdscr = _stdscr_required()
++    if stdscr is None:
+         return -1
+-    return lc_wdraw_vline(lc.stdscr, y, x, height, ch, attr)
++    return lc_wdraw_vline(stdscr, y, x, height, ch, attr)
+ 
+ 
+ def lc_draw_box(
+     y: int,
+     x: int,
+     height: int,
+     width: int,
+     attr: int = LC_ATTR_NONE,
+     hch: str = "-",
+     vch: str = "|",
+     tl: str = "+",
+     tr: str = "+",
+     bl: str = "+",
+     br: str = "+",
+ ) -> int:
+-    if lc.stdscr is None:
++    stdscr = _stdscr_required()
++    if stdscr is None:
+         return -1
+-    return lc_wdraw_box(lc.stdscr, y, x, height, width, attr, hch, vch, tl, tr, bl, br)
++    return lc_wdraw_box(stdscr, y, x, height, width, attr, hch, vch, tl, tr, bl, br)
+ 
+ 
+ def lc_draw_box_title(
+     y: int,
+     x: int,
+     height: int,
+     width: int,
+     title: str,
+     attr: int = LC_ATTR_NONE,
+ ) -> int:
+-    if lc.stdscr is None:
++    stdscr = _stdscr_required()
++    if stdscr is None:
+         return -1
+     return lc_wdraw_box_title(
+-        lc.stdscr, y, x, height, width, title, attr
++        stdscr, y, x, height, width, title, attr
+     )
+ 
+ 
+ def lc_draw_panel(
+     y: int,
+     x: int,
+     height: int,
+     width: int,
+     title: Optional[str] = None,
+     frame_attr: int = LC_ATTR_NONE,
+     fill: Optional[str] = None,
+     fill_attr: int = LC_ATTR_NONE,
+     hch: str = "-",
+     vch: str = "|",
+     tl: str = "+",
+     tr: str = "+",
+     bl: str = "+",
+     br: str = "+",
+ ) -> int:
+-    if lc.stdscr is None:
++    stdscr = _stdscr_required()
++    if stdscr is None:
+         return -1
+     return lc_wdraw_panel(
+-        lc.stdscr,
++        stdscr,
+         y,
+         x,
+         height,
+         width,
+         title,
+         frame_attr,
+         fill,
+         fill_attr,
+         hch, vch, tl, tr, bl, br,
+     )
+ 
+ 
+ def lc_addstr_at(y: int, x: int, s: str) -> int:
+-    if lc.stdscr is None:
++    stdscr = _stdscr_required()
++    if stdscr is None:
+         return -1
+-    return lc_mvwaddstr(lc.stdscr, y, x, s)
++    return lc_mvwaddstr(stdscr, y, x, s)
+ 
+ 
+ def lc_addstr_centered(y: int, s: str) -> int:
+-    if lc.stdscr is None:
++    stdscr = _stdscr_required()
++    if stdscr is None:
+         return -1
+     x = lc_center_x(lc.cols, s)
+-    return lc_mvwaddstr(lc.stdscr, y, x, s)
++    return lc_mvwaddstr(stdscr, y, x, s)
+ 
+ 
+ def lc_set_escdelay(ms: int) -> int:
+     lc.escdelay_ms = ms
+     return 0
+ 
+ 
+ def lc_nodelay(on: bool) -> int:
+     lc.nodelay_on = bool(on)
+     return 0
+ 
+ 
+ def lc_meta_esc(on: bool) -> int:
+     lc.meta_on = bool(on)
+     return 0
+diff --git a/lc_term.py b/lc_term.py
+index 28c524236e3f8763c6fb796b7817fbf8dc59c4d3..7f3028d66a0e6e2676c10c0a8ee7df8dba8efa75 100644
+--- a/lc_term.py
++++ b/lc_term.py
+@@ -44,50 +44,54 @@ def lc_attr_make(
+     style: int = 0,
+     fg: int = LC_COLOR_DEFAULT,
+     bg: int = LC_COLOR_DEFAULT,
+ ) -> int:
+     fg_byte = fg & LC_ATTR_COLOR_MASK
+     bg_byte = bg & LC_ATTR_COLOR_MASK
+     return (
+         (style & LC_ATTR_STYLE_MASK)
+         | (fg_byte << LC_ATTR_FG_SHIFT)
+         | (bg_byte << LC_ATTR_BG_SHIFT)
+     )
+ 
+ 
+ def lc_attr_style(attr: int) -> int:
+     return attr & LC_ATTR_STYLE_MASK
+ 
+ 
+ def lc_attr_fg(attr: int) -> int:
+     return (attr >> LC_ATTR_FG_SHIFT) & LC_ATTR_COLOR_MASK
+ 
+ 
+ def lc_attr_bg(attr: int) -> int:
+     return (attr >> LC_ATTR_BG_SHIFT) & LC_ATTR_COLOR_MASK
+ 
+ 
++def lc_attr_is_default(attr: int) -> bool:
++    return attr == LC_ATTR_NONE
++
++
+ def _sgr_16_color(is_fg: bool, idx: int) -> str:
+     # Map 1..8 to normal 30-37/40-47, 9..16 to bright 90-97/100-107.
+     if idx <= 0:
+         return ""
+ 
+     base_normal = 30 if is_fg else 40
+     base_bright = 90 if is_fg else 100
+ 
+     if 1 <= idx <= 8:
+         return str(base_normal + (idx - 1))
+     if 9 <= idx <= 16:
+         return str(base_bright + (idx - 9))
+     return ""
+ 
+ 
+ LC_DIRTY = 1
+ LC_FORCEPAINT = 2
+ 
+ 
+ class TermOps:
+     move_fmt = "\x1b[%d;%dH"
+     clear_screen = "\x1b[2J\x1b[H"
+     erase_eol = "\x1b[K"
+     clear_line = "\x1b[2K"
+     show_cursor_on = "\x1b[?25h"
+@@ -130,51 +134,51 @@ class Terminal:
+ 
+     def move_bytes(self, y: int, x: int) -> bytes:
+         return (self.ops.move_fmt % (y + 1, x + 1)).encode("ascii")
+ 
+     def encode_text(self, s: str) -> bytes:
+         return s.encode("utf-8", "replace")
+ 
+     def clear_screen(self) -> None:
+         self.write(self.ops.clear_screen)
+ 
+     def show_cursor(self, on: bool) -> None:
+         self.write(self.ops.show_cursor_on if on else self.ops.show_cursor_off)
+ 
+     def use_alternate_screen(self, on: bool) -> None:
+         self.write(self.ops.alt_screen_on if on else self.ops.alt_screen_off)
+ 
+     def set_keypad_transmit(self, on: bool) -> int:
+         self.write(self.ops.keypad_transmit_on if on else self.ops.keypad_transmit_off)
+         return 0
+ 
+     def set_wrap(self, on: bool) -> None:
+         self.write(self.ops.enable_wrap if on else self.ops.disable_wrap)
+ 
+     def attr_bytes(self, attr: int) -> bytes:
+         # LC_ATTR_NONE means "reset to defaults".
+-        if attr == LC_ATTR_NONE:
++        if lc_attr_is_default(attr):
+             return self.ops.sgr_reset.encode("ascii")
+ 
+         style = lc_attr_style(attr)
+         fg_idx = lc_attr_fg(attr)
+         bg_idx = lc_attr_bg(attr)
+ 
+         parts: list[str] = ["0"]
+         if style & LC_ATTR_BOLD:
+             parts.append("1")
+         if style & LC_ATTR_UNDERLINE:
+             parts.append("4")
+         if style & LC_ATTR_REVERSE:
+             parts.append("7")
+ 
+         fg_sgr = _sgr_16_color(True, fg_idx)
+         if fg_sgr:
+             parts.append(fg_sgr)
+ 
+         bg_sgr = _sgr_16_color(False, bg_idx)
+         if bg_sgr:
+             parts.append(bg_sgr)
+ 
+         return ("\x1b[" + ";".join(parts) + "m").encode("ascii")
+ 
+     def set_attr(self, attr: int) -> None:
+diff --git a/lc_window.py b/lc_window.py
+index acb8b1f50193f2711b0750f6e36c6d3d7b3e2e29..ab6b0f5dad4b630210636ce70ba881cdb57ebf3d 100644
+--- a/lc_window.py
++++ b/lc_window.py
+@@ -1,120 +1,145 @@
+ from dataclasses import dataclass, field
+ from typing import Optional
+ from lc_term import LC_DIRTY, LC_FORCEPAINT, LC_ATTR_NONE
+ 
+ 
+ @dataclass
+ class LCCell:
+     ch: str = ' '
+-    attr: int = 0
++    attr: int = LC_ATTR_NONE
+ 
+ 
+ @dataclass
+ class LCRow:
+     line: list[LCCell]
+     firstch: int = 0
+     lastch: int = 0
+     flags: int = LC_DIRTY | LC_FORCEPAINT
+ 
+ 
+ @dataclass
+ class LCWin:
+     maxy: int
+     maxx: int
+     begy: int = 0
+     begx: int = 0
+     cury: int = 0
+     curx: int = 0
+     parent: Optional["LCWin"] = None
+     root: Optional["LCWin"] = None
+     pary: int = 0
+     parx: int = 0
+     alive: bool = True
+     owns_storage: bool = True
+     children: list["LCWin"] = field(default_factory=list)
+     lines: list[LCRow] = field(default_factory=list)
+ 
+ 
+ def _is_live_window(win: Optional[LCWin]) -> bool:
+     return win is not None and win.alive
+ 
+ 
+ def _require_live_window(win: Optional[LCWin]) -> int:
+     if not _is_live_window(win):
+         return -1
+     return 0
+ 
+ 
+ def _coerce_draw_char(ch: Optional[str]) -> Optional[str]:
+     if ch is None or not ch:
+         return None
+     return ch[0]
+ 
+ 
+ def _valid_window_coord(win: LCWin, y: int, x: int) -> bool:
+-    if y < 0 or y >= win.maxy:
+-        return False
+-    if x < 0 or x >= win.maxx:
+-        return False
+-    return True
++    return 0 <= y < win.maxy and 0 <= x < win.maxx
+ 
+ 
+ def _has_storage_shape(win: LCWin) -> bool:
+-    if len(win.lines) != win.maxy:
+-        return False
+-    for ln in win.lines:
+-        if len(ln.line) != win.maxx:
+-            return False
+-    return True
++    return len(win.lines) == win.maxy and all(len(ln.line) == win.maxx for ln in win.lines)
+ 
+ 
+ def _root_consistent(win: LCWin) -> bool:
+     if not win.alive:
+         return False
+ 
+     if win.root is None:
+         return False
+ 
+     if win.parent is None:
+         return win.root is win
+ 
+     return win.root is not None and win.root.alive
+ 
+ 
+ def _window_invariants_hold(win: Optional[LCWin]) -> bool:
+     if win is None:
+         return False
+     if not win.alive:
+         return False
+     if win.maxy <= 0 or win.maxx <= 0:
+         return False
+-    if not _has_storage_shape(win):
+-        return False
+-    if not _root_consistent(win):
+-        return False
+-    return True
++    return _has_storage_shape(win) and _root_consistent(win)
++
++
++def _cursor_write_prefix_len(win: LCWin, text_len: int) -> int:
++    if text_len <= 0:
++        return 0
++    if not _cursor_writable(win):
++        return 0
++
++    remaining_cells = ((win.maxy - 1 - win.cury) * win.maxx) + (win.maxx - win.curx)
++    if remaining_cells <= 0:
++        return 0
++    return min(text_len, remaining_cells)
++
++
++def _waddstr_common(win: Optional[LCWin], s: str, attr: int) -> int:
++    if s is None:
++        return -1
++    if _require_live_window(win) != 0:
++        return -1
++    if win.maxx <= 0 or win.maxy <= 0:
++        return -1
++    if not _cursor_writable(win):
++        return -1
++    if not s:
++        return 0
++
++    writable = _cursor_write_prefix_len(win, len(s))
++    if writable <= 0:
++        return 0
++
++    off = 0
++    while off < writable:
++        row_space = win.maxx - win.curx
++        chunk_len = min(writable - off, row_space)
++        _store_hspan_text_unchecked(win, win.cury, win.curx, s[off:off + chunk_len], attr)
++        _advance_cursor_after_span(win, chunk_len)
++        off += chunk_len
++    return 0
+ 
+ 
+ def _mark_row_dirty_span(win: LCWin, y: int, start: int, end: int) -> None:
+     if not win.alive:
+         return
+     if y < 0 or y >= win.maxy:
+         return
+     mark_dirty(win.lines[y], start, end, win.maxx)
+ 
+ 
+ def _mark_window_dirty_rows(
+     win: Optional[LCWin],
+     y_start: int,
+     y_end: int,
+     start: int,
+     end: int,
+ ) -> None:
+     if win is None or not win.alive:
+         return
+     if y_start >= y_end:
+         return
+ 
+     ys, ye = _clip_range(y_start, y_end - y_start, win.maxy)
+     if ys >= ye:
+         return
+@@ -835,124 +860,55 @@ def lc_wscrl(win: Optional[LCWin], n: int) -> int:
+ # ---------------------------------------------------------------------------
+ # Cursor-driven write family
+ #
+ # These helpers write at the current cursor position and advance the cursor
+ # after each character. The cursor saturates at the last valid cell rather
+ # than wrapping or raising an error. Use lc_wmove to reposition before writing.
+ #
+ # Completion semantics:
+ # - These operations are not atomic all-or-nothing writes.
+ # - A single-cell write at the final writable cell succeeds and leaves the
+ #   cursor at that same cell.
+ # - A bulk write stores the longest visible prefix permitted by the current
+ #   cursor position and window bounds under the saturating cursor policy.
+ # - If the bulk write reaches the final writable cell, that cell is written,
+ #   the cursor remains there, and the function returns success.
+ # - The API does not expose a public end-of-window sentinel cursor state, so
+ #   any remaining suffix beyond that point is intentionally not written.
+ # - Invalid window or invalid current cursor state still returns -1.
+ # ---------------------------------------------------------------------------
+ 
+ def lc_waddstr_attr(win: Optional[LCWin], s: str, attr: int) -> int:
+     # Attributed variant of lc_waddstr() with the same saturating cursor
+     # semantics. The full string is not guaranteed to be written; the visible
+     # prefix is stored and the final writable cell, if reached, is written and
+     # the cursor saturates there.
+-    if s is None:
+-        return -1
+-    if _require_live_window(win) != 0:
+-        return -1
+-    if win.maxx <= 0 or win.maxy <= 0:
+-        return -1
+-    if not _cursor_writable(win):
+-        return -1
+-    if not s:
+-        return 0
+-
+-    if _cursor_at_last_cell(win):
+-        _set_cell(win, win.cury, win.curx, s[0], attr)
+-        return 0
+-
+-    off = 0
+-    slen = len(s)
+-
+-    while off < slen:
+-        if not _cursor_writable(win):
+-            return -1
+-        if _cursor_at_last_cell(win):
+-            break
+-
+-        row_space = win.maxx - win.curx
+-        chunk_len = min(slen - off, row_space)
+-        chunk = s[off:off + chunk_len]
+-
+-        _store_hspan_text_unchecked(win, win.cury, win.curx, chunk, attr)
+-        _advance_cursor_after_span(win, chunk_len)
+-        off += chunk_len
+-
+-    return 0
++    return _waddstr_common(win, s, attr)
+ 
+ 
+ def lc_waddstr(win: Optional[LCWin], s: str) -> int:
+-    if s is None:
+-        return -1
+-    if _require_live_window(win) != 0:
+-        return -1
+-    if win.maxx <= 0 or win.maxy <= 0:
+-        return -1
+-    if not _cursor_writable(win):
+-        return -1
+-    if not s:
+-        return 0
+-
+-    # Prefix-success semantics:
+-    # write visible characters until the cursor reaches the final writable
+-    # cell. That final cell is written successfully and the cursor saturates
+-    # there. The unwritten suffix, if any, is intentionally discarded because
+-    # the public cursor model does not expose an out-of-range end position.
+-    if _cursor_at_last_cell(win):
+-        _set_cell(win, win.cury, win.curx, s[0], LC_ATTR_NONE)
+-        return 0
+-
+-    off = 0
+-    slen = len(s)
+-
+-    while off < slen:
+-        if not _cursor_writable(win):
+-            return -1
+-        if _cursor_at_last_cell(win):
+-            break
+-
+-        row_space = win.maxx - win.curx
+-        chunk_len = min(slen - off, row_space)
+-        chunk = s[off:off + chunk_len]
+-
+-        _store_hspan_text_unchecked(win, win.cury, win.curx, chunk, LC_ATTR_NONE)
+-        _advance_cursor_after_span(win, chunk_len)
+-        off += chunk_len
+-
+-    return 0
++    return _waddstr_common(win, s, LC_ATTR_NONE)
+ 
+ 
+ def lc_wmove(win: Optional[LCWin], y: int, x: int) -> int:
+     if _require_live_window(win) != 0:
+         return -1
+     if not _valid_window_coord(win, y, x):
+         return -1
+     win.cury = y
+     win.curx = x
+     return 0
+ 
+ 
+ def lc_wput(win: Optional[LCWin], ch: int, attr: int = LC_ATTR_NONE) -> int:
+     if _require_live_window(win) != 0:
+         return -1
+     if not _cursor_writable(win):
+         return -1
+ 
+     try:
+         outch = chr(ch)
+     except (TypeError, ValueError):
+         return -1
+ 
+     # Single-cell success at the final writable cell is intentional.
+     # The cursor model saturates there rather than advancing to a sentinel
