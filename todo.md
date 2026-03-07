@@ -204,6 +204,14 @@ Once the immediate correctness gaps are closed, these are the next worthwhile st
   and creation of replacement root into in-place remapping magic.
 - [ ] Consider a more explicit row-level bulk emit helper.
 - [ ] Add regression tests for large dirty spans and clipped redraws.
+- [x] Separate refresh/session-lifecycle policy from the diff/flush path.
+  `lc_screen` now owns session-validity, resize-gate, and topology-liveness
+  logic through `lc_refresh_session_ready`, `lc_refresh_resize_gate`, and
+  related helpers.  `lc_refresh` consumes that contract and stays focused on
+  staging and terminal output.
+- [x] Introduce `lc_wstage` / `lc_wstageflush` as the canonical public
+  names for the two-phase and combined refresh paths.  `lc_wnoutrefresh` and
+  `lc_wrefresh` remain as aliases for backward compatibility.
 
 ### Input
 - [ ] Add more explicit tests for ALT-modified input.

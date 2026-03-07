@@ -724,6 +724,32 @@ from lc_refresh import lc_wnoutrefresh
 lc_wnoutrefresh(my_window)
 ```
 
+### `lc_wstage(win: LCWin) -> int`
+
+Stage the dirty visible portion of a window into the global desired screen
+without writing terminal output.  This is the canonical name for the staging
+half of the two-phase refresh model; `lc_wnoutrefresh` is an alias.
+
+```python
+from lc_refresh import lc_wstage, lc_doupdate
+
+lc_wstage(win_a)
+lc_wstage(win_b)
+lc_doupdate()
+```
+
+### `lc_wstageflush(win: LCWin) -> int`
+
+Stage a window and immediately flush staged changes to the terminal in one
+call.  This is the canonical name for the combined stage-and-flush operation;
+`lc_wrefresh` is an alias.
+
+```python
+from lc_refresh import lc_wstageflush
+
+lc_wstageflush(my_window)
+```
+
 ### `lc_doupdate() -> int`
 
 Flush staged desired-screen changes to the terminal.

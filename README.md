@@ -58,6 +58,8 @@ Backends are responsible for:
 - raw/cbreak/echo semantics for that platform
 - terminal size discovery
 - input-byte acquisition
+- establishing any backend-owned terminal/output handles needed before the core
+  queries size or emits terminal control
 - resize observation
 
 Backends are not responsible for:
@@ -137,6 +139,11 @@ Required functions:
 - `input_pending()` means keyboard/input-byte readiness only. A pending resize alone must not make it return `True`.
 - `poll_resize()` means a real terminal size change is pending observation by the core.
 - `clear_resize()` clears backend resize state after the core has consumed it.
+- backend initialization happens before the core constructs the root window or
+  trusts terminal geometry
+- this allows a backend to establish platform-owned terminal/output handles
+  first, so later `get_size()` and terminal writes operate against the active
+  backend state rather than speculative defaults
 - Backends must not leak platform-specific input events into the core except as byte stream plus resize notification.
 
 ### Backend semantic consequences
@@ -696,3 +703,48 @@ Even before any C port exists, we should still avoid patterns that weaken the ar
 
 The goal is not “Python written as fake C”.
 The goal is “clean Python with contracts that can survive a later systems-language port”.
+
+### Practical initialization rule
+
+Runtime initialization should bring the backend up first and only then discover
+terminal size and build the root backing window. That keeps root-window
+construction tied to the backend's live terminal state rather than pre-init guesses.
+
+### Runtime lifecycle invariant
+
+The core runtime should distinguish between:
+
+- backend-started state
+- fully active screen-session state
+
+Those are not identical.
+
+Practical rule:
+
+- after backend init succeeds, backend-owned resources must be considered live
+- the session becomes fully active only after terminal-enter/clear/setup steps
+  succeed and `stdscr` is established
+- teardown must be safe both for:
+  - partial initialization failures after backend startup
+  - repeated/idempotent shutdown calls
+
+This keeps init/teardown behavior explicit and avoids half-live runtime state
+after failures or double-entry mistakes.
+
+### Refresh/runtime boundary rule
+
+The refresh layer should operate on current runtime-owned screen state, but it
+should not own session-lifecycle policy.
+
+Practical rule:
+
+- refresh code may stage and flush against runtime-managed physical/desired
+  screen buffers
+- session validity, root replacement after resize, and topology liveness gates
+  belong to the runtime/screen layer
+- refresh should consume a narrow runtime-facing helper contract rather than
+  re-deriving lifecycle policy itself
+
+This keeps the diff/flush path focused on staging and terminal output while the
+runtime layer remains responsible for whether a refresh operation is valid in
+the current session/topology state.

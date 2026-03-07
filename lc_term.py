@@ -114,7 +114,10 @@ class Terminal:
     def _write_all(self, data: bytes) -> None:
         off = 0
         while off < len(data):
-            nwritten = os.write(self.out_fd, data[off:])
+            try:
+                nwritten = os.write(self.out_fd, data[off:])
+            except InterruptedError:
+                continue
             if nwritten == 0:
                 raise OSError("write returned zero bytes")
             if nwritten < 0:

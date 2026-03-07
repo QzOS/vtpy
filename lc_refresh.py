@@ -2,55 +2,24 @@ from typing import Optional
 
 from lc_term import LC_ATTR_NONE, LC_DIRTY, LC_FORCEPAINT
 from lc_window import LCCell, LCRow, LCWin
-from lc_screen import lc, lc_check_resize
+
+from lc_screen import (
+    lc,
+    lc_refresh_cache_has_shape,
+    lc_refresh_ensure_virtual_cache_shape,
+    lc_refresh_mark_full_virtual_dirty,
+    lc_refresh_physical_cache_valid,
+    lc_refresh_reinit_physical_cache,
+    lc_refresh_resize_gate,
+    lc_refresh_session_ready,
+    lc_refresh_target_after_resize,
+)
 
 LC_RENDER_BATCH_BYTES = 8192
 
 
-def _reinit_physical_cache() -> None:
-    lc.screen = [
-        [LCCell(' ', LC_ATTR_NONE) for _x in range(lc.cols)]
-        for _y in range(lc.lines)
-    ]
-    lc.term.clear_screen()
-    lc.cur_y = 0
-    lc.cur_x = 0
-    lc.term.reset_state()
-    lc.cur_attr = LC_ATTR_NONE
-
-
-def _reinit_virtual_cache() -> None:
-    lc.vscreen = [
-        [LCCell(' ', LC_ATTR_NONE) for _x in range(lc.cols)]
-        for _y in range(lc.lines)
-    ]
-    lc.vdirty_first = [-1 for _ in range(lc.lines)]
-    lc.vdirty_last = [-1 for _ in range(lc.lines)]
-    lc.virtual_cur_y = 0
-    lc.virtual_cur_x = 0
-    lc.virtual_cursor_valid = False
-
-
-def _mark_full_virtual_dirty() -> None:
-    if lc.lines <= 0 or lc.cols <= 0:
-        return
-
-    for abs_y in range(lc.lines):
-        lc.vdirty_first[abs_y] = 0
-        lc.vdirty_last[abs_y] = lc.cols - 1
-
-
-def _cache_has_shape(cache: list[list[LCCell]], rows: int, cols: int) -> bool:
-    if len(cache) != rows:
-        return False
-    if rows == 0:
-        return True
-    return all(len(row) == cols for row in cache)
-
-
-def _ensure_virtual_cache_shape() -> None:
-    if not _cache_has_shape(lc.vscreen, lc.lines, lc.cols):
-        _reinit_virtual_cache()
+def lc_check_resize() -> int:
+    return lc_refresh_resize_gate()
 
 
 def _dirty_span_for_row(win: LCWin, ln: LCRow, abs_y: int) -> tuple[int, int]:
@@ -107,10 +76,6 @@ def _sync_physical_cell(abs_y: int, abs_x: int, cell: LCCell) -> None:
 def _note_emitted_attr(attr: int) -> None:
     lc.cur_attr = attr
     lc.term.note_attr(attr)
-
-
-def lc_refresh() -> int:
-    return lc_wrefresh(lc.stdscr)
 
 
 def _append_move(buf: bytearray, y: int, x: int) -> None:
@@ -171,37 +136,25 @@ def _flush_cell_run(
 
 
 def _resolve_refresh_window(win: Optional[LCWin]) -> tuple[int, Optional[LCWin]]:
-    if win is None or not win.alive:
+    if not lc_refresh_session_ready():
         return -1, None
-
-    # Refresh uses a global physical-screen cache.
-    # Root refresh is the fully coherent presentation path for the current
-    # shared-backing model. Derived-window refresh is limited to dirty state
-    # tracked on that derived view.
-    requested_win = win
-    requested_is_root = requested_win.parent is None
 
     rc = lc_check_resize()
     if rc < 0:
         return -1, None
-    if rc == 1:
-        # A root resize invalidates all derived windows. Do not silently
-        # replace an explicitly requested derived window with stdscr.
-        #
-        # After a rebuild:
-        #   - derived windows from the old topology must fail refresh
-        #   - an explicit refresh of the old root may fall through to rebuilt stdscr
-        if not requested_is_root:
-            return -1, None
-        win = lc.stdscr
 
-    if win is None or not win.alive:
+    resolved = lc_refresh_target_after_resize(win, rc)
+    if resolved is None or not resolved.alive:
         return -1, None
 
-    return 0, win
+    # Refresh uses global physical/desired screen caches owned by the runtime.
+    # Root refresh remains the fully coherent path for the current shared-
+    # backing model; derived-window refresh is still limited to dirty state
+    # tracked on that derived view.
+    return 0, resolved
 
 
-def lc_wnoutrefresh(win: Optional[LCWin]) -> int:
+def lc_wstage(win: Optional[LCWin]) -> int:
     # Stage the dirty visible portion of a window into the global desired
     # screen. This does not write terminal output. Later staged windows may
     # overwrite earlier desired content in overlapping regions.
@@ -209,8 +162,8 @@ def lc_wnoutrefresh(win: Optional[LCWin]) -> int:
     if rc != 0 or win is None:
         return -1
 
-    if not _cache_has_shape(lc.vscreen, lc.lines, lc.cols):
-        _reinit_virtual_cache()
+    if not lc_refresh_cache_has_shape(lc.vscreen, lc.lines, lc.cols):
+        lc_refresh_ensure_virtual_cache_shape()
 
     for y in range(win.maxy):
         abs_y = win.begy + y
@@ -271,16 +224,16 @@ def lc_doupdate() -> int:
         return 0
 
     physical_reinit = False
-    if not _cache_has_shape(lc.screen, lc.lines, lc.cols):
-        _reinit_physical_cache()
+    if not lc_refresh_physical_cache_valid():
+        lc_refresh_reinit_physical_cache()
         physical_reinit = True
 
-    _ensure_virtual_cache_shape()
+    lc_refresh_ensure_virtual_cache_shape()
 
     # If the physical cache was reinitialized, the terminal was logically
     # cleared. The full desired screen must therefore be considered dirty.
     if physical_reinit:
-        _mark_full_virtual_dirty()
+        lc_refresh_mark_full_virtual_dirty()
 
     out = bytearray()
 
@@ -344,8 +297,24 @@ def lc_doupdate() -> int:
     return 0
 
 
-def lc_wrefresh(win: Optional[LCWin]) -> int:
-    rc = lc_wnoutrefresh(win)
+def lc_flush() -> int:
+    return lc_doupdate()
+
+
+def lc_wstageflush(win: Optional[LCWin]) -> int:
+    rc = lc_wstage(win)
     if rc != 0:
         return rc
-    return lc_doupdate()
+    return lc_flush()
+
+
+def lc_refresh() -> int:
+    return lc_wstageflush(lc.stdscr)
+
+
+def lc_wnoutrefresh(win: Optional[LCWin]) -> int:
+    return lc_wstage(win)
+
+
+def lc_wrefresh(win: Optional[LCWin]) -> int:
+    return lc_wstageflush(win)
