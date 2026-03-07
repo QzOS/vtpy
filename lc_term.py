@@ -66,6 +66,10 @@ def lc_attr_bg(attr: int) -> int:
     return (attr >> LC_ATTR_BG_SHIFT) & LC_ATTR_COLOR_MASK
 
 
+def lc_attr_is_default(attr: int) -> bool:
+    return attr == LC_ATTR_NONE
+
+
 def _sgr_16_color(is_fg: bool, idx: int) -> str:
     # Map 1..8 to normal 30-37/40-47, 9..16 to bright 90-97/100-107.
     if idx <= 0:
@@ -152,7 +156,7 @@ class Terminal:
 
     def attr_bytes(self, attr: int) -> bytes:
         # LC_ATTR_NONE means "reset to defaults".
-        if attr == LC_ATTR_NONE:
+        if lc_attr_is_default(attr):
             return self.ops.sgr_reset.encode("ascii")
 
         style = lc_attr_style(attr)

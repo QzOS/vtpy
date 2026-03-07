@@ -1,21 +1,21 @@
 # vtpy README
 
-## 1. What this library is
+## 1. Scope
 
-vtpy is a Python terminal library built around a simple idea:
+vtpy is a Python terminal library with a deliberately explicit architecture:
 
-- terminal I/O is a byte stream plus a character-cell screen model
+- terminal I/O is modeled as a byte stream plus a character-cell screen
 - rendering is explicit and diff-based
 - input decoding is explicit and protocol-aware
-- platform-specific terminal control belongs in backends
+- terminal control is backend-owned
 - higher-level semantics belong in OS-neutral core code
-- reference design for a future OS-native text ui runtime
+- the codebase is intended to remain a plausible reference shape for a future OS-native text UI runtime
 
 This is not a wrapper around curses.
-This is not trying to pretend ncurses history never happened either.
-The point is to build a terminal library with clear internal contracts, modern enough to live comfortably in VT/xterm-style terminals, and structured so that POSIX and Windows can both exist under the same core model.
+It also does not pretend ncurses and terminal history do not exist.
+The goal is a terminal library with explicit internal contracts, a modern VT/xterm-oriented model, and a structure in which POSIX and Windows can live under the same core semantics.
 
-## 2. What this library is not
+## 2. Non-goals
 
 At the current stage, vtpy is not:
 
@@ -28,7 +28,7 @@ At the current stage, vtpy is not:
 
 Those may become future directions, but they are not current promises.
 
-## 3. Current architecture
+## 3. Architecture
 
 The codebase is split into two broad layers.
 
@@ -141,7 +141,7 @@ Required functions:
 
 ### Backend semantic consequences
 
-This means:
+Practical consequences:
 
 - UTF-8 decoding belongs above the backend
 - VT/CSI/SS3 parsing belongs above the backend
@@ -178,7 +178,7 @@ That means:
 - `root is self` means the window is the top-level root object for its current backing topology
 - dead windows clear `root`
 
-### Cursor progression rule
+### Cursor progression
 
 The current cursor policy is saturating at the last writable cell.
 
@@ -191,12 +191,11 @@ That means:
 
 This is intentional.
 The library does not currently expose a public end-of-window sentinel state through
-`cury` / `curx`.
+`cury`/`curx`.
 
 Single-cell and bulk text writes are expected to obey the same final-cell rule.
 
-
-### Cursor-driven write completion rule
+### Cursor-driven write completion
 
 Cursor-driven writes are intentionally prefix-success operations, not atomic
 all-or-nothing operations.
@@ -213,7 +212,7 @@ That means:
 
 This is the current intended contract.
 
-### Vertical line-shift semantics
+### Vertical line shifting
 
 The window layer also supports vertical content shifting.
 
@@ -424,7 +423,7 @@ The current text/input/rendering model is deliberately simple.
 
 ### Current truth
 
-- input arrives as bytes
+- input arrives as raw bytes
 - UTF-8 is decoded in `lc_keys.py`
 - cells currently store a Python `str` character
 - rendering uses `str.encode('utf-8', 'replace')`
@@ -463,7 +462,7 @@ The purpose is not abstraction for abstraction's sake. The purpose is to make la
 
 ## 8. Resize model
 
-Resize is modeled as an event-like condition surfaced through the backend and consumed by the core.
+Resize is treated as an event-like condition surfaced through the backend and consumed by the core.
 
 ### Current flow
 
@@ -485,7 +484,7 @@ That is why `input_pending()` must not become `True` merely because a resize hap
 
 ## 9. What is currently stable enough to rely on
 
-These parts are stable enough to be treated as the current intended model:
+These parts are stable enough to treat as the current intended model:
 
 - byte-oriented backend interface
 - screen/state/backend separation
@@ -609,7 +608,7 @@ This keeps the future UI layer compatible with resize-driven subwindow invalidat
 The root `UIView` binds directly to `stdscr`.
 
 It is not treated as a synthetic panel and is not bound through a fake
-panel-content subwindow. This keeps the model honest:
+panel-content subwindow. This keeps the model explicit:
 
 - root layout is a logical UI concern
 - root binding is a runtime concern
@@ -658,6 +657,5 @@ Even before any C port exists, we should still avoid patterns that weaken the ar
 - convenience abstractions that obscure terminal semantics
 - accidental semantic broadening that is not documented
 
-The goal is not "Python written as fake C".
-The goal is "clean Python with contracts that can survive a later systems-language port".
-
+The goal is not “Python written as fake C”.
+The goal is “clean Python with contracts that can survive a later systems-language port”.

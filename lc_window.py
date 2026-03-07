@@ -6,7 +6,7 @@ from lc_term import LC_DIRTY, LC_FORCEPAINT, LC_ATTR_NONE
 @dataclass
 class LCCell:
     ch: str = ' '
-    attr: int = 0
+    attr: int = LC_ATTR_NONE
 
 
 @dataclass
@@ -52,20 +52,11 @@ def _coerce_draw_char(ch: Optional[str]) -> Optional[str]:
 
 
 def _valid_window_coord(win: LCWin, y: int, x: int) -> bool:
-    if y < 0 or y >= win.maxy:
-        return False
-    if x < 0 or x >= win.maxx:
-        return False
-    return True
+    return 0 <= y < win.maxy and 0 <= x < win.maxx
 
 
 def _has_storage_shape(win: LCWin) -> bool:
-    if len(win.lines) != win.maxy:
-        return False
-    for ln in win.lines:
-        if len(ln.line) != win.maxx:
-            return False
-    return True
+    return len(win.lines) == win.maxy and all(len(ln.line) == win.maxx for ln in win.lines)
 
 
 def _root_consistent(win: LCWin) -> bool:
@@ -88,11 +79,45 @@ def _window_invariants_hold(win: Optional[LCWin]) -> bool:
         return False
     if win.maxy <= 0 or win.maxx <= 0:
         return False
-    if not _has_storage_shape(win):
-        return False
-    if not _root_consistent(win):
-        return False
-    return True
+    return _has_storage_shape(win) and _root_consistent(win)
+
+
+def _cursor_write_prefix_len(win: LCWin, text_len: int) -> int:
+    if text_len <= 0:
+        return 0
+    if not _cursor_writable(win):
+        return 0
+
+    remaining_cells = ((win.maxy - 1 - win.cury) * win.maxx) + (win.maxx - win.curx)
+    if remaining_cells <= 0:
+        return 0
+    return min(text_len, remaining_cells)
+
+
+def _waddstr_common(win: Optional[LCWin], s: str, attr: int) -> int:
+    if s is None:
+        return -1
+    if _require_live_window(win) != 0:
+        return -1
+    if win.maxx <= 0 or win.maxy <= 0:
+        return -1
+    if not _cursor_writable(win):
+        return -1
+    if not s:
+        return 0
+
+    writable = _cursor_write_prefix_len(win, len(s))
+    if writable <= 0:
+        return 0
+
+    off = 0
+    while off < writable:
+        row_space = win.maxx - win.curx
+        chunk_len = min(writable - off, row_space)
+        _store_hspan_text_unchecked(win, win.cury, win.curx, s[off:off + chunk_len], attr)
+        _advance_cursor_after_span(win, chunk_len)
+        off += chunk_len
+    return 0
 
 
 def _mark_row_dirty_span(win: LCWin, y: int, start: int, end: int) -> None:
@@ -857,80 +882,11 @@ def lc_waddstr_attr(win: Optional[LCWin], s: str, attr: int) -> int:
     # semantics. The full string is not guaranteed to be written; the visible
     # prefix is stored and the final writable cell, if reached, is written and
     # the cursor saturates there.
-    if s is None:
-        return -1
-    if _require_live_window(win) != 0:
-        return -1
-    if win.maxx <= 0 or win.maxy <= 0:
-        return -1
-    if not _cursor_writable(win):
-        return -1
-    if not s:
-        return 0
-
-    if _cursor_at_last_cell(win):
-        _set_cell(win, win.cury, win.curx, s[0], attr)
-        return 0
-
-    off = 0
-    slen = len(s)
-
-    while off < slen:
-        if not _cursor_writable(win):
-            return -1
-        if _cursor_at_last_cell(win):
-            break
-
-        row_space = win.maxx - win.curx
-        chunk_len = min(slen - off, row_space)
-        chunk = s[off:off + chunk_len]
-
-        _store_hspan_text_unchecked(win, win.cury, win.curx, chunk, attr)
-        _advance_cursor_after_span(win, chunk_len)
-        off += chunk_len
-
-    return 0
+    return _waddstr_common(win, s, attr)
 
 
 def lc_waddstr(win: Optional[LCWin], s: str) -> int:
-    if s is None:
-        return -1
-    if _require_live_window(win) != 0:
-        return -1
-    if win.maxx <= 0 or win.maxy <= 0:
-        return -1
-    if not _cursor_writable(win):
-        return -1
-    if not s:
-        return 0
-
-    # Prefix-success semantics:
-    # write visible characters until the cursor reaches the final writable
-    # cell. That final cell is written successfully and the cursor saturates
-    # there. The unwritten suffix, if any, is intentionally discarded because
-    # the public cursor model does not expose an out-of-range end position.
-    if _cursor_at_last_cell(win):
-        _set_cell(win, win.cury, win.curx, s[0], LC_ATTR_NONE)
-        return 0
-
-    off = 0
-    slen = len(s)
-
-    while off < slen:
-        if not _cursor_writable(win):
-            return -1
-        if _cursor_at_last_cell(win):
-            break
-
-        row_space = win.maxx - win.curx
-        chunk_len = min(slen - off, row_space)
-        chunk = s[off:off + chunk_len]
-
-        _store_hspan_text_unchecked(win, win.cury, win.curx, chunk, LC_ATTR_NONE)
-        _advance_cursor_after_span(win, chunk_len)
-        off += chunk_len
-
-    return 0
+    return _waddstr_common(win, s, LC_ATTR_NONE)
 
 
 def lc_wmove(win: Optional[LCWin], y: int, x: int) -> int:

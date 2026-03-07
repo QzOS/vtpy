@@ -40,13 +40,23 @@ def _mark_full_virtual_dirty() -> None:
         lc.vdirty_last[abs_y] = lc.cols - 1
 
 
+def _cache_has_shape(cache: list[list[LCCell]], rows: int, cols: int) -> bool:
+    if len(cache) != rows:
+        return False
+    if rows == 0:
+        return True
+    return all(len(row) == cols for row in cache)
+
+
 def _ensure_virtual_cache_shape() -> None:
-    if len(lc.vscreen) != lc.lines or (lc.lines > 0 and len(lc.vscreen[0]) != lc.cols):
+    if not _cache_has_shape(lc.vscreen, lc.lines, lc.cols):
         _reinit_virtual_cache()
 
 
 def _dirty_span_for_row(win: LCWin, ln: LCRow, abs_y: int) -> tuple[int, int]:
     if abs_y < 0 or abs_y >= lc.lines:
+        return 0, 0
+    if not (ln.flags & LC_DIRTY):
         return 0, 0
 
     start_x = max(0, int(ln.firstch))
@@ -199,7 +209,7 @@ def lc_wnoutrefresh(win: Optional[LCWin]) -> int:
     if rc != 0 or win is None:
         return -1
 
-    if len(lc.vscreen) != lc.lines or (lc.lines > 0 and len(lc.vscreen[0]) != lc.cols):
+    if not _cache_has_shape(lc.vscreen, lc.lines, lc.cols):
         _reinit_virtual_cache()
 
     for y in range(win.maxy):
@@ -261,7 +271,7 @@ def lc_doupdate() -> int:
         return 0
 
     physical_reinit = False
-    if len(lc.screen) != lc.lines or (lc.lines > 0 and len(lc.screen[0]) != lc.cols):
+    if not _cache_has_shape(lc.screen, lc.lines, lc.cols):
         _reinit_physical_cache()
         physical_reinit = True
 
