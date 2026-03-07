@@ -35,6 +35,17 @@ class UIEvent:
     height: int = 0
 
 
+def _copy_key(key: Optional[LCKey]) -> Optional[LCKey]:
+    if key is None:
+        return None
+    return LCKey(
+        type=key.type,
+        mods=key.mods,
+        rune=key.rune,
+        keysym=key.keysym,
+    )
+
+
 def ui_event_from_key(key: LCKey, width: int = 0, height: int = 0) -> UIEvent:
     ev = UIEvent()
 
@@ -48,7 +59,7 @@ def ui_event_from_key(key: LCKey, width: int = 0, height: int = 0) -> UIEvent:
         return ev
 
     ev.type = UI_EVENT_KEY
-    ev.key = key
+    ev.key = _copy_key(key)
     return ev
 
 
@@ -77,7 +88,7 @@ def ui_translate_command(ev: UIEvent) -> int:
         return UI_CMD_NONE
 
     if key.type == LC_KT_CHAR:
-        if key.rune in (ord('\t'), ):
+        if key.rune == ord('\t'):
             return UI_CMD_FOCUS_NEXT
         if key.rune in (ord('\n'), ord('\r')):
             return UI_CMD_ACTIVATE

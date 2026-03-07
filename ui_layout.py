@@ -82,6 +82,16 @@ def ui_rect_split_horizontal(rect: UIRect, left_width: int) -> tuple[UIRect, UIR
     return left, right
 
 
+def _ui_layout_nonnull_views(views: list) -> list:
+    out = []
+    if views is None:
+        return out
+    for view in views:
+        if view is not None:
+            out.append(view)
+    return out
+
+
 def ui_layout_assign_root(view, height: int, width: int) -> int:
     if view is None:
         return -1
@@ -114,7 +124,8 @@ def ui_layout_stack_vertical(parent_rect: UIRect, views: list, gap: int = 0) -> 
     if views is None:
         return -1
 
-    count = len(views)
+    live_views = _ui_layout_nonnull_views(views)
+    count = len(live_views)
     if count == 0:
         return 0
 
@@ -124,10 +135,7 @@ def ui_layout_stack_vertical(parent_rect: UIRect, views: list, gap: int = 0) -> 
 
     cur_y = parent_rect.y
 
-    for i, view in enumerate(views):
-        if view is None:
-            continue
-
+    for i, view in enumerate(live_views):
         if i == count - 1:
             h = (parent_rect.y + parent_rect.height) - cur_y
         else:
@@ -155,7 +163,8 @@ def ui_layout_stack_horizontal(parent_rect: UIRect, views: list, gap: int = 0) -
     if views is None:
         return -1
 
-    count = len(views)
+    live_views = _ui_layout_nonnull_views(views)
+    count = len(live_views)
     if count == 0:
         return 0
 
@@ -165,9 +174,7 @@ def ui_layout_stack_horizontal(parent_rect: UIRect, views: list, gap: int = 0) -
 
     cur_x = parent_rect.x
 
-    for i, view in enumerate(views):
-        if view is None:
-            continue
+    for i, view in enumerate(live_views):
         if i == count - 1:
             w = (parent_rect.x + parent_rect.width) - cur_x
         else:

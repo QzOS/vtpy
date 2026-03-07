@@ -42,6 +42,16 @@ class UIRuntime:
     last_height: int = 0
 
 
+def _ui_runtime_note_size(rt: UIRuntime) -> None:
+    rows, cols = lc_get_size()
+    rt.last_height = rows
+    rt.last_width = cols
+
+
+def _ui_runtime_focus_changed_rc(rc: int) -> int:
+    return UI_CMD_REDRAW if rc == 0 else rc
+
+
 def ui_runtime_create(root: Optional[UIView]) -> Optional[UIRuntime]:
     rt = None
     rows = 0
@@ -64,8 +74,8 @@ def ui_runtime_layout(rt: Optional[UIRuntime]) -> int:
         return -1
 
     rows, cols = lc_get_size()
-    rt.last_width = cols
     rt.last_height = rows
+    rt.last_width = cols
     if ui_layout_assign_root(rt.root, rows, cols) != 0:
         return -1
     if ui_view_measure(rt.root) != 0:
@@ -103,6 +113,9 @@ def ui_runtime_set_focus(rt: Optional[UIRuntime], view: Optional[UIView]) -> int
 
     if old is not None:
         ui_view_handle_event(old, ui_focus_out_event())
+
+    if view is not None and not view.is_visible():
+        return -1
 
     rt.focused = view
 
@@ -162,6 +175,7 @@ def ui_runtime_dispatch(rt: Optional[UIRuntime], ev: UIEvent) -> int:
     if ev.type == UI_EVENT_RESIZE:
         if ui_runtime_bind_root(rt) != 0:
             return -1
+        _ui_runtime_note_size(rt)
         ui_view_mark_dirty(rt.root)
         return UI_CMD_REDRAW
 
@@ -171,9 +185,9 @@ def ui_runtime_dispatch(rt: Optional[UIRuntime], ev: UIEvent) -> int:
 
     if ev.type == UI_EVENT_COMMAND:
         if ev.command == UI_CMD_FOCUS_NEXT:
-            return ui_runtime_focus_cycle(rt, 1)
+            return _ui_runtime_focus_changed_rc(ui_runtime_focus_cycle(rt, 1))
         if ev.command == UI_CMD_FOCUS_PREV:
-            return ui_runtime_focus_cycle(rt, -1)
+            return _ui_runtime_focus_changed_rc(ui_runtime_focus_cycle(rt, -1))
         if ev.command == UI_CMD_QUIT:
             rt.running = False
             return UI_CMD_QUIT
