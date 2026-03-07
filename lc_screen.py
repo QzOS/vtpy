@@ -81,6 +81,29 @@ class LCState:
 lc = LCState()
 
 
+def _reset_runtime_state() -> None:
+    lc.screen = []
+    lc.vscreen = []
+    lc.vdirty_first = []
+    lc.vdirty_last = []
+    lc.pushback_byte = None
+    lc.cur_y = 0
+    lc.cur_x = 0
+    lc.cur_attr = LC_ATTR_NONE
+    lc.virtual_cur_y = 0
+    lc.virtual_cur_x = 0
+    lc.virtual_cursor_valid = False
+    lc.lines = 0
+    lc.cols = 0
+    lc.resize_pending = False
+    lc.orig_term = None
+    lc.cur_term = None
+
+
+def _stdscr_required() -> Optional[LCWin]:
+    return lc.stdscr
+
+
 def _reset_render_cache(rows: int, cols: int) -> None:
     lc.screen = [
         [LCCell(' ', LC_ATTR_NONE) for _x in range(cols)]
@@ -153,10 +176,7 @@ def lc_init() -> Optional[LCWin]:
         lc.term.reset_state()
         lc_free(lc.stdscr)
         lc.stdscr = None
-        _reset_render_cache(0, 0)
-        lc.lines = 0
-        lc.cols = 0
-        lc.resize_pending = False
+        _reset_runtime_state()
         return None
 
 
@@ -220,22 +240,7 @@ def lc_end() -> int:
             lc_free(lc.stdscr)
             lc.stdscr = None
 
-        lc.screen = []
-        lc.vscreen = []
-        lc.vdirty_first = []
-        lc.vdirty_last = []
-        lc.pushback_byte = None
-        lc.cur_y = 0
-        lc.cur_x = 0
-        lc.cur_attr = LC_ATTR_NONE
-        lc.virtual_cur_y = 0
-        lc.virtual_cur_x = 0
-        lc.virtual_cursor_valid = False
-        lc.lines = 0
-        lc.cols = 0
-        lc.resize_pending = False
-        lc.orig_term = None
-        lc.cur_term = None
+        _reset_runtime_state()
     return 0
 
 
@@ -356,45 +361,51 @@ def lc_session():
 
 
 def lc_move(y: int, x: int) -> int:
-    if lc.stdscr is None:
+    stdscr = _stdscr_required()
+    if stdscr is None:
         return -1
-    if y < 0 or y >= lc.stdscr.maxy or x < 0 or x >= lc.stdscr.maxx:
+    if y < 0 or y >= stdscr.maxy or x < 0 or x >= stdscr.maxx:
         return -1
-    return lc_wmove(lc.stdscr, y, x)
+    return lc_wmove(stdscr, y, x)
 
 
 def lc_put(ch: int) -> int:
-    if lc.stdscr is None:
+    stdscr = _stdscr_required()
+    if stdscr is None:
         return -1
-    return lc_wput(lc.stdscr, ch, LC_ATTR_NONE)
+    return lc_wput(stdscr, ch, LC_ATTR_NONE)
 
 
 def lc_addstr(s: str) -> int:
-    if lc.stdscr is None:
+    stdscr = _stdscr_required()
+    if stdscr is None:
         return -1
     if s is None:
         return -1
-    return lc_waddstr(lc.stdscr, s)
+    return lc_waddstr(stdscr, s)
 
 
 def lc_addstr_attr(s: str, attr: int) -> int:
-    if lc.stdscr is None:
+    stdscr = _stdscr_required()
+    if stdscr is None:
         return -1
     if s is None:
         return -1
-    return lc_waddstr_attr(lc.stdscr, s, attr)
+    return lc_waddstr_attr(stdscr, s, attr)
 
 
 def lc_mvaddstr(y: int, x: int, s: str) -> int:
-    if lc.stdscr is None:
+    stdscr = _stdscr_required()
+    if stdscr is None:
         return -1
-    return lc_mvwaddstr(lc.stdscr, y, x, s)
+    return lc_mvwaddstr(stdscr, y, x, s)
 
 
 def lc_put_attr(ch: int, attr: int) -> int:
-    if lc.stdscr is None:
+    stdscr = _stdscr_required()
+    if stdscr is None:
         return -1
-    return lc_wput(lc.stdscr, ch, attr)
+    return lc_wput(stdscr, ch, attr)
 
 
 def lc_fill(
@@ -405,33 +416,38 @@ def lc_fill(
     ch: str = " ",
     attr: int = LC_ATTR_NONE,
 ) -> int:
-    if lc.stdscr is None:
+    stdscr = _stdscr_required()
+    if stdscr is None:
         return -1
-    return lc_wfill(lc.stdscr, y, x, height, width, ch, attr)
+    return lc_wfill(stdscr, y, x, height, width, ch, attr)
 
 
 def lc_touchline(y: int, n: int = 1) -> int:
-    if lc.stdscr is None:
+    stdscr = _stdscr_required()
+    if stdscr is None:
         return -1
-    return lc_wtouchline(lc.stdscr, y, n)
+    return lc_wtouchline(stdscr, y, n)
 
 
 def lc_touchwin() -> int:
-    if lc.stdscr is None:
+    stdscr = _stdscr_required()
+    if stdscr is None:
         return -1
-    return lc_wtouchwin(lc.stdscr)
+    return lc_wtouchwin(stdscr)
 
 
 def lc_insdelln(n: int) -> int:
-    if lc.stdscr is None:
+    stdscr = _stdscr_required()
+    if stdscr is None:
         return -1
-    return lc_winsdelln(lc.stdscr, n)
+    return lc_winsdelln(stdscr, n)
 
 
 def lc_scrl(n: int) -> int:
-    if lc.stdscr is None:
+    stdscr = _stdscr_required()
+    if stdscr is None:
         return -1
-    return lc_wscrl(lc.stdscr, n)
+    return lc_wscrl(stdscr, n)
 
 
 def lc_center_x(width: int, text: str) -> int:
@@ -446,15 +462,17 @@ def lc_center_x(width: int, text: str) -> int:
 
 
 def lc_draw_hline(y: int, x: int, width: int, ch: str = "-", attr: int = LC_ATTR_NONE) -> int:
-    if lc.stdscr is None:
+    stdscr = _stdscr_required()
+    if stdscr is None:
         return -1
-    return lc_wdraw_hline(lc.stdscr, y, x, width, ch, attr)
+    return lc_wdraw_hline(stdscr, y, x, width, ch, attr)
 
 
 def lc_draw_vline(y: int, x: int, height: int, ch: str = "|", attr: int = LC_ATTR_NONE) -> int:
-    if lc.stdscr is None:
+    stdscr = _stdscr_required()
+    if stdscr is None:
         return -1
-    return lc_wdraw_vline(lc.stdscr, y, x, height, ch, attr)
+    return lc_wdraw_vline(stdscr, y, x, height, ch, attr)
 
 
 def lc_draw_box(
@@ -470,9 +488,10 @@ def lc_draw_box(
     bl: str = "+",
     br: str = "+",
 ) -> int:
-    if lc.stdscr is None:
+    stdscr = _stdscr_required()
+    if stdscr is None:
         return -1
-    return lc_wdraw_box(lc.stdscr, y, x, height, width, attr, hch, vch, tl, tr, bl, br)
+    return lc_wdraw_box(stdscr, y, x, height, width, attr, hch, vch, tl, tr, bl, br)
 
 
 def lc_draw_box_title(
@@ -483,10 +502,11 @@ def lc_draw_box_title(
     title: str,
     attr: int = LC_ATTR_NONE,
 ) -> int:
-    if lc.stdscr is None:
+    stdscr = _stdscr_required()
+    if stdscr is None:
         return -1
     return lc_wdraw_box_title(
-        lc.stdscr, y, x, height, width, title, attr
+        stdscr, y, x, height, width, title, attr
     )
 
 
@@ -506,10 +526,11 @@ def lc_draw_panel(
     bl: str = "+",
     br: str = "+",
 ) -> int:
-    if lc.stdscr is None:
+    stdscr = _stdscr_required()
+    if stdscr is None:
         return -1
     return lc_wdraw_panel(
-        lc.stdscr,
+        stdscr,
         y,
         x,
         height,
@@ -523,16 +544,18 @@ def lc_draw_panel(
 
 
 def lc_addstr_at(y: int, x: int, s: str) -> int:
-    if lc.stdscr is None:
+    stdscr = _stdscr_required()
+    if stdscr is None:
         return -1
-    return lc_mvwaddstr(lc.stdscr, y, x, s)
+    return lc_mvwaddstr(stdscr, y, x, s)
 
 
 def lc_addstr_centered(y: int, s: str) -> int:
-    if lc.stdscr is None:
+    stdscr = _stdscr_required()
+    if stdscr is None:
         return -1
     x = lc_center_x(lc.cols, s)
-    return lc_mvwaddstr(lc.stdscr, y, x, s)
+    return lc_mvwaddstr(stdscr, y, x, s)
 
 
 def lc_set_escdelay(ms: int) -> int:
