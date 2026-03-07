@@ -127,6 +127,9 @@ def lc_init() -> Optional[LCWin]:
         lc_free(lc.stdscr)
         lc.stdscr = None
         _reset_render_cache(0, 0)
+        lc.lines = 0
+        lc.cols = 0
+        lc.resize_pending = False
         return None
 
 
@@ -196,6 +199,11 @@ def lc_end() -> int:
         lc.cur_y = 0
         lc.cur_x = 0
         lc.cur_attr = LC_ATTR_NONE
+        lc.lines = 0
+        lc.cols = 0
+        lc.resize_pending = False
+        lc.orig_term = None
+        lc.cur_term = None
     return 0
 
 
@@ -222,6 +230,11 @@ def _copy_overlap(dst: LCWin, src: LCWin) -> None:
 
 
 def lc_is_resize_pending() -> bool:
+    # Ask the backend first so this reflects newly observed platform resize
+    # state rather than only whatever the core has already consumed.
+    if backend.poll_resize(lc):
+        lc.resize_pending = True
+        return True
     return bool(lc.resize_pending)
 
 

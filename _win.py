@@ -340,6 +340,16 @@ def init(state) -> int:
         _reset_state_fields(state)
         return -1
 
+    # Keep current terminal state aligned with what was actually applied.
+    #
+    # orig_term remains the restore target captured at startup.
+    # cur_term must reflect the live console modes so later raw/cbreak/echo
+    # transitions are computed from the active baseline rather than the
+    # original console state. Otherwise apply_term() can accidentally roll
+    # VT processing or input mode changes back out.
+    state.cur_term[0] = new_in_mode
+    state.cur_term[1] = new_out_mode
+
     state.resize_pending = False
     state._last_size = get_size(state)
     return 0

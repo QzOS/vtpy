@@ -287,7 +287,7 @@ class LCKeyParser:
         return (mods << 24) | (keysym & 0x00FFFFFF)
 
     @staticmethod
-    def _extract_mods_and_keysym(packed: int) -> tuple[int, int]:
+    def _extract_keysym_and_mods(packed: int) -> tuple[int, int]:
         if packed < 0:
             return -1, 0
         mods = (packed >> 24) & 0xFF
@@ -354,7 +354,7 @@ class LCKeyParser:
 
         if uc == ord('['):
             packed = self._decode_csi()
-            keysym, mods = self._extract_mods_and_keysym(packed)
+            keysym, mods = self._extract_keysym_and_mods(packed)
             if keysym < 0:
                 return LC_ERR
             out.type = LC_KT_KEYSYM

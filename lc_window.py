@@ -355,6 +355,28 @@ def _advance_cursor(win: LCWin) -> None:
         win.cury += 1
 
 
+def _advance_cursor_after_span(win: LCWin, span_len: int) -> None:
+    # Preconditions:
+    # - cursor is currently writable
+    # - span_len >= 0
+    # - span_len does not advance beyond the final writable cell
+    if span_len <= 0:
+        return
+
+    remaining = span_len
+    while remaining > 0 and not _cursor_at_last_cell(win):
+        row_space = win.maxx - win.curx
+        step = min(remaining, row_space)
+        remaining -= step
+        win.curx += step
+        if win.curx >= win.maxx:
+            if win.cury >= (win.maxy - 1):
+                win.curx = win.maxx - 1
+            else:
+                win.curx = 0
+                win.cury += 1
+
+
 def _box_title_span(
     y: int,
     x: int,
@@ -488,9 +510,9 @@ def lc_subwin(
         children=[],
         lines=lines,
     )
-    parent.children.append(sub)
     if not _window_invariants_hold(sub):
         return None
+    parent.children.append(sub)
     return sub
 
 
@@ -662,14 +684,29 @@ def lc_waddstr(win: Optional[LCWin], s: str) -> int:
         return -1
     if not _cursor_writable(win):
         return -1
+    if not s:
+        return 0
 
-    for ch in s:
+    if _cursor_at_last_cell(win):
+        _set_cell(win, win.cury, win.curx, s[0], LC_ATTR_NONE)
+        return 0
+
+    off = 0
+    slen = len(s)
+
+    while off < slen:
         if not _cursor_writable(win):
             return -1
-        _set_cell(win, win.cury, win.curx, ch, LC_ATTR_NONE)
         if _cursor_at_last_cell(win):
             break
-        _advance_cursor(win)
+
+        row_space = win.maxx - win.curx
+        chunk_len = min(slen - off, row_space)
+        chunk = s[off:off + chunk_len]
+
+        _store_hspan_text_unchecked(win, win.cury, win.curx, chunk, LC_ATTR_NONE)
+        _advance_cursor_after_span(win, chunk_len)
+        off += chunk_len
 
     return 0
 

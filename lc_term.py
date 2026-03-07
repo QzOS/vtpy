@@ -34,12 +34,20 @@ class Terminal:
         self.out_fd = 1
         self._last_attr = None
 
+    def _write_all(self, data: bytes) -> None:
+        off = 0
+        while off < len(data):
+            nwritten = os.write(self.out_fd, data[off:])
+            if nwritten <= 0:
+                raise OSError("short write to terminal output")
+            off += nwritten
+
     def write(self, s: str) -> None:
-        os.write(self.out_fd, s.encode('utf-8', 'replace'))
+        self._write_all(s.encode('utf-8', 'replace'))
 
     def write_bytes(self, data: bytes | bytearray) -> None:
         if data:
-            os.write(self.out_fd, bytes(data))
+            self._write_all(bytes(data))
 
     def move(self, y: int, x: int) -> None:
         # ANSI/VT cursor positions are 1-based.
