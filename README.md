@@ -366,6 +366,58 @@ shared-backing model.
 Derived-window refresh is supported only within the limits described in the
 subwindow contract above.
 
+### Two-phase refresh support
+
+The refresh model also supports a staged two-phase path:
+
+- `lc_wnoutrefresh(win)` copies the currently dirty visible portion of `win`
+  into a global desired-screen buffer
+- `lc_doupdate()` compares that desired screen against the cached physical
+  screen image and emits only terminal changes
+
+This means:
+
+- `lc_wnoutrefresh()` does not write terminal output
+- `lc_doupdate()` does not inspect window backing stores directly
+- later `lc_wnoutrefresh()` calls may overwrite earlier staged content in the
+  desired-screen buffer
+- the final hardware cursor position after `lc_doupdate()` follows the most
+  recently staged window cursor that is physically visible
+
+### Relationship to direct refresh
+
+`lc_wrefresh(win)` remains the convenience operation:
+
+- it performs the current resize/rebuild checks
+- it stages `win` via `lc_wnoutrefresh(win)`
+- it flushes output via `lc_doupdate()`
+
+So `lc_wrefresh()` is defined as the immediate staged-refresh path, while
+`lc_wnoutrefresh()` + `lc_doupdate()` provide explicit batching.
+
+### Desired-screen ordering rule
+
+The desired screen is global physical-screen intent, not per-window intent.
+
+That means:
+
+- `lc_wnoutrefresh()` is ordering-sensitive
+- if multiple windows stage overlapping regions, the later staged window wins
+  for those cells in the desired screen
+- applications that need fully coherent shared-backing presentation should
+  still prefer staging the root window
+
+### Resize interaction for staged refresh
+
+`lc_doupdate()` is a flush step, not a window-topology rebuild source.
+
+That means:
+
+- if a resize rebuild is observed before `lc_doupdate()` flushes output, the
+  previously staged desired-screen content is discarded
+- applications must rebuild any derived windows and restage against the rebuilt
+  topology before the next flush
+
 ## 6. Current text model
 
 The current text/input/rendering model is deliberately simple.

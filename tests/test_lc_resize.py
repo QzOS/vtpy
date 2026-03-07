@@ -10,7 +10,6 @@ def test_check_resize_noop_when_size_unchanged(monkeypatch):
     lc.lines = 3
     lc.cols = 4
     lc.screen = []
-    lc.hashes = []
     lc.resize_pending = False
 
     monkeypatch.setattr("lc_screen.backend.get_size", lambda state: (3, 4))
@@ -30,7 +29,6 @@ def test_check_resize_rebuilds_screen_and_preserves_overlap(monkeypatch):
     lc.lines = 2
     lc.cols = 3
     lc.screen = [[None for _ in range(3)] for _ in range(2)]
-    lc.hashes = [123, 456]
     lc.resize_pending = True
     lc.cur_y = 9
     lc.cur_x = 9
@@ -59,7 +57,6 @@ def test_check_resize_rebuilds_screen_and_preserves_overlap(monkeypatch):
     assert lc.stdscr.curx == 2
     assert len(lc.screen) == 4
     assert len(lc.screen[0]) == 5
-    assert lc.hashes == [0, 0, 0, 0]
     assert lc.cur_y == 0
     assert lc.cur_x == 0
     assert lc.cur_attr == LC_ATTR_NONE
@@ -81,7 +78,6 @@ def test_check_resize_clamps_cursor_when_new_size_is_smaller(monkeypatch):
     lc.lines = 4
     lc.cols = 5
     lc.screen = [[None for _ in range(5)] for _ in range(4)]
-    lc.hashes = [0, 0, 0, 0]
     lc.resize_pending = True
 
     class FakeTerm:
@@ -128,7 +124,6 @@ def test_readkey_returns_resize_event(monkeypatch):
     lc.lines = 2
     lc.cols = 2
     lc.screen = [[None for _ in range(2)] for _ in range(2)]
-    lc.hashes = [0, 0]
     lc.resize_pending = True
     lc.nodelay_on = False
 

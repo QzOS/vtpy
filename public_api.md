@@ -706,12 +706,34 @@ with lc_session():
 
 ### `lc_wrefresh(win: LCWin) -> int`
 
-Refresh a specific window.
+Refresh a specific window immediately (stage + flush).
 
 ```python
 from lc_refresh import lc_wrefresh
 
 lc_wrefresh(my_window)
+```
+
+### `lc_wnoutrefresh(win: LCWin) -> int`
+
+Stage a specific window into the global desired screen without writing output.
+
+```python
+from lc_refresh import lc_wnoutrefresh
+
+lc_wnoutrefresh(my_window)
+```
+
+### `lc_doupdate() -> int`
+
+Flush staged desired-screen changes to the terminal.
+
+```python
+from lc_refresh import lc_wnoutrefresh, lc_doupdate
+
+lc_wnoutrefresh(win_a)
+lc_wnoutrefresh(win_b)
+lc_doupdate()
 ```
 
 ---

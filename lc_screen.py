@@ -54,11 +54,25 @@ class LCState:
         self.meta_on = True
         self.pushback_byte: Optional[int] = None
 
+        # Physical screen cache: what the terminal is believed to show now.
         self.screen: list[list[LCCell]] = []
-        self.hashes: list[int] = []
+
+        # Desired virtual screen: what the next doupdate should realize.
+        self.vscreen: list[list[LCCell]] = []
+
+        # Dirty spans in the desired virtual screen, indexed by physical row.
+        # A value of -1 means "clean/no pending desired update".
+        self.vdirty_first: list[int] = []
+        self.vdirty_last: list[int] = []
+
         self.cur_y = 0
         self.cur_x = 0
         self.cur_attr = LC_ATTR_NONE
+
+        # Cursor requested by the most recently staged window.
+        self.virtual_cur_y = 0
+        self.virtual_cur_x = 0
+        self.virtual_cursor_valid = False
 
         self.resize_pending = False
         self._prev_winch_handler = None
@@ -72,10 +86,18 @@ def _reset_render_cache(rows: int, cols: int) -> None:
         [LCCell(' ', LC_ATTR_NONE) for _x in range(cols)]
         for _y in range(rows)
     ]
-    lc.hashes = [0 for _ in range(rows)]
+    lc.vscreen = [
+        [LCCell(' ', LC_ATTR_NONE) for _x in range(cols)]
+        for _y in range(rows)
+    ]
+    lc.vdirty_first = [-1 for _ in range(rows)]
+    lc.vdirty_last = [-1 for _ in range(rows)]
     lc.cur_y = 0
     lc.cur_x = 0
     lc.cur_attr = LC_ATTR_NONE
+    lc.virtual_cur_y = 0
+    lc.virtual_cur_x = 0
+    lc.virtual_cursor_valid = False
     lc.term.reset_state()
 
 
@@ -199,11 +221,16 @@ def lc_end() -> int:
             lc.stdscr = None
 
         lc.screen = []
-        lc.hashes = []
+        lc.vscreen = []
+        lc.vdirty_first = []
+        lc.vdirty_last = []
         lc.pushback_byte = None
         lc.cur_y = 0
         lc.cur_x = 0
         lc.cur_attr = LC_ATTR_NONE
+        lc.virtual_cur_y = 0
+        lc.virtual_cur_x = 0
+        lc.virtual_cursor_valid = False
         lc.lines = 0
         lc.cols = 0
         lc.resize_pending = False

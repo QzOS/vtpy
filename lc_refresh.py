@@ -7,57 +7,42 @@ from lc_screen import lc, lc_check_resize
 LC_RENDER_BATCH_BYTES = 8192
 
 
-def _hash_attr(h: int, attr: int) -> int:
-    # Hash the full integer attribute value, not just the low byte.
-    # This keeps row-hash change detection correct if the attribute
-    # model grows beyond 8 bits.
-    v = int(attr) & 0xFFFFFFFF
-    for shift in (0, 8, 16, 24):
-        h ^= (v >> shift) & 0xFF
-        h = (h * 16777619) & 0xFFFFFFFF
-    return h
-
-
-def _can_use_row_hash_shortcut(win: LCWin, abs_y: int) -> bool:
-    # The row-hash cache is keyed by physical screen row.
-    # Only use the row-hash shortcut when the window row maps to the full
-    # visible physical row domain represented by lc.hashes[abs_y].
-    #
-    # Dead-window safety: lc_wrefresh() validates win.alive before entering
-    # the render loop, so this helper is never called on a dead window.
-    if abs_y < 0 or abs_y >= lc.lines:
-        return False
-    if win.parent is not None:
-        return False
-    if win.begx != 0:
-        return False
-    return win.maxx == lc.cols
-
-
-def line_hash(cells: list[LCCell]) -> int:
-    # FNV-1a over rendered cell content and attr.
-    h = 2166136261
-    for cell in cells:
-        data = cell.ch.encode('utf-8', 'replace')
-        for b in data:
-            h ^= b
-            h = (h * 16777619) & 0xFFFFFFFF
-
-        h = _hash_attr(h, cell.attr)
-    return h
-
-
 def _reinit_physical_cache() -> None:
     lc.screen = [
         [LCCell(' ', LC_ATTR_NONE) for _x in range(lc.cols)]
         for _y in range(lc.lines)
     ]
-    lc.hashes = [0 for _ in range(lc.lines)]
     lc.term.clear_screen()
     lc.cur_y = 0
     lc.cur_x = 0
     lc.term.reset_state()
     lc.cur_attr = LC_ATTR_NONE
+
+
+def _reinit_virtual_cache() -> None:
+    lc.vscreen = [
+        [LCCell(' ', LC_ATTR_NONE) for _x in range(lc.cols)]
+        for _y in range(lc.lines)
+    ]
+    lc.vdirty_first = [-1 for _ in range(lc.lines)]
+    lc.vdirty_last = [-1 for _ in range(lc.lines)]
+    lc.virtual_cur_y = 0
+    lc.virtual_cur_x = 0
+    lc.virtual_cursor_valid = False
+
+
+def _mark_full_virtual_dirty() -> None:
+    if lc.lines <= 0 or lc.cols <= 0:
+        return
+
+    for abs_y in range(lc.lines):
+        lc.vdirty_first[abs_y] = 0
+        lc.vdirty_last[abs_y] = lc.cols - 1
+
+
+def _ensure_virtual_cache_shape() -> None:
+    if len(lc.vscreen) != lc.lines or (lc.lines > 0 and len(lc.vscreen[0]) != lc.cols):
+        _reinit_virtual_cache()
 
 
 def _dirty_span_for_row(win: LCWin, ln: LCRow, abs_y: int) -> tuple[int, int]:
@@ -77,6 +62,30 @@ def _clear_row_dirty(ln: LCRow) -> None:
     ln.firstch = 0
     ln.lastch = 0
     ln.flags = 0
+
+
+def _mark_virtual_dirty(abs_y: int, start_x: int, end_x: int) -> None:
+    if abs_y < 0 or abs_y >= lc.lines:
+        return
+    if start_x >= end_x:
+        return
+
+    if lc.vdirty_first[abs_y] < 0:
+        lc.vdirty_first[abs_y] = start_x
+        lc.vdirty_last[abs_y] = end_x - 1
+        return
+
+    if start_x < lc.vdirty_first[abs_y]:
+        lc.vdirty_first[abs_y] = start_x
+    if (end_x - 1) > lc.vdirty_last[abs_y]:
+        lc.vdirty_last[abs_y] = end_x - 1
+
+
+def _clear_virtual_dirty(abs_y: int) -> None:
+    if abs_y < 0 or abs_y >= lc.lines:
+        return
+    lc.vdirty_first[abs_y] = -1
+    lc.vdirty_last[abs_y] = -1
 
 
 def _sync_physical_cell(abs_y: int, abs_x: int, cell: LCCell) -> None:
@@ -151,9 +160,9 @@ def _flush_cell_run(
     _emit_run(buf, abs_y, run_start_x, text, attr)
 
 
-def lc_wrefresh(win: Optional[LCWin]) -> int:
+def _resolve_refresh_window(win: Optional[LCWin]) -> tuple[int, Optional[LCWin]]:
     if win is None or not win.alive:
-        return -1
+        return -1, None
 
     # Refresh uses a global physical-screen cache.
     # Root refresh is the fully coherent presentation path for the current
@@ -164,7 +173,7 @@ def lc_wrefresh(win: Optional[LCWin]) -> int:
 
     rc = lc_check_resize()
     if rc < 0:
-        return -1
+        return -1, None
     if rc == 1:
         # A root resize invalidates all derived windows. Do not silently
         # replace an explicitly requested derived window with stdscr.
@@ -173,48 +182,111 @@ def lc_wrefresh(win: Optional[LCWin]) -> int:
         #   - derived windows from the old topology must fail refresh
         #   - an explicit refresh of the old root may fall through to rebuilt stdscr
         if not requested_is_root:
-            return -1
+            return -1, None
         win = lc.stdscr
 
     if win is None or not win.alive:
-        return -1
-    out = bytearray()
+        return -1, None
 
-    if len(lc.screen) != lc.lines or (lc.lines > 0 and len(lc.screen[0]) != lc.cols):
-        _reinit_physical_cache()
+    return 0, win
+
+
+def lc_wnoutrefresh(win: Optional[LCWin]) -> int:
+    # Stage the dirty visible portion of a window into the global desired
+    # screen. This does not write terminal output. Later staged windows may
+    # overwrite earlier desired content in overlapping regions.
+    rc, win = _resolve_refresh_window(win)
+    if rc != 0 or win is None:
+        return -1
+
+    if len(lc.vscreen) != lc.lines or (lc.lines > 0 and len(lc.vscreen[0]) != lc.cols):
+        _reinit_virtual_cache()
 
     for y in range(win.maxy):
         abs_y = win.begy + y
-        if abs_y >= lc.lines:
+        if abs_y < 0 or abs_y >= lc.lines:
             continue
 
         ln = win.lines[y]
         if not (ln.flags & LC_DIRTY):
             continue
 
-        if _can_use_row_hash_shortcut(win, abs_y):
-            h = line_hash(ln.line)
-            if h == lc.hashes[abs_y] and not (ln.flags & LC_FORCEPAINT):
-                _clear_row_dirty(ln)
-                continue
-
-            lc.hashes[abs_y] = h
         start_x, end_x = _dirty_span_for_row(win, ln, abs_y)
         if start_x >= end_x:
             _clear_row_dirty(ln)
             continue
-        run_start_x = -1
-        run_cells: list[LCCell] = []
+
+        row_changed = False
 
         for x in range(start_x, end_x):
             abs_x = win.begx + x
-            if abs_x >= lc.cols:
-                _flush_cell_run(out, abs_y, run_start_x, run_cells)
-                run_start_x = -1
-                run_cells.clear()
+            if abs_x < 0 or abs_x >= lc.cols:
                 continue
 
-            cell = ln.line[x]
+            src = ln.line[x]
+            dst = lc.vscreen[abs_y][abs_x]
+            if dst.ch != src.ch or dst.attr != src.attr:
+                dst.ch = src.ch
+                dst.attr = src.attr
+                row_changed = True
+
+        if row_changed:
+            clipped_start = max(0, win.begx + start_x)
+            clipped_end = min(lc.cols, win.begx + end_x)
+            if clipped_start < clipped_end:
+                _mark_virtual_dirty(abs_y, clipped_start, clipped_end)
+
+        _clear_row_dirty(ln)
+
+    final_y = win.begy + win.cury
+    final_x = win.begx + win.curx
+    if 0 <= final_y < lc.lines and 0 <= final_x < lc.cols:
+        lc.virtual_cur_y = final_y
+        lc.virtual_cur_x = final_x
+        lc.virtual_cursor_valid = True
+    else:
+        lc.virtual_cursor_valid = False
+
+    return 0
+
+
+def lc_doupdate() -> int:
+    # Two-phase flush must not emit stale staged geometry across a resize
+    # rebuild. If a rebuild occurred, stdscr has already been replaced and any
+    # derived topology must be rebuilt and restaged by the application.
+    rc = lc_check_resize()
+    if rc < 0:
+        return -1
+    if rc == 1:
+        return 0
+
+    physical_reinit = False
+    if len(lc.screen) != lc.lines or (lc.lines > 0 and len(lc.screen[0]) != lc.cols):
+        _reinit_physical_cache()
+        physical_reinit = True
+
+    _ensure_virtual_cache_shape()
+
+    # If the physical cache was reinitialized, the terminal was logically
+    # cleared. The full desired screen must therefore be considered dirty.
+    if physical_reinit:
+        _mark_full_virtual_dirty()
+
+    out = bytearray()
+
+    for abs_y in range(lc.lines):
+        first = lc.vdirty_first[abs_y]
+        last = lc.vdirty_last[abs_y]
+        if first < 0 or last < first:
+            continue
+
+        start_x = first
+        end_x = last + 1
+        run_start_x = -1
+        run_cells: list[LCCell] = []
+
+        for abs_x in range(start_x, end_x):
+            cell = lc.vscreen[abs_y][abs_x]
             scr = lc.screen[abs_y][abs_x]
             if scr.ch == cell.ch and scr.attr == cell.attr:
                 _flush_cell_run(out, abs_y, run_start_x, run_cells)
@@ -244,14 +316,15 @@ def lc_wrefresh(win: Optional[LCWin]) -> int:
         if len(out) >= LC_RENDER_BATCH_BYTES:
             _flush(out)
 
-        _clear_row_dirty(ln)
+        _clear_virtual_dirty(abs_y)
 
-    final_y = win.begy + win.cury
-    final_x = win.begx + win.curx
-    if final_y < lc.lines and final_x < lc.cols:
-        _append_move(out, final_y, final_x)
-        lc.cur_y = final_y
-        lc.cur_x = final_x
+    if lc.virtual_cursor_valid:
+        final_y = lc.virtual_cur_y
+        final_x = lc.virtual_cur_x
+        if final_y < lc.lines and final_x < lc.cols:
+            _append_move(out, final_y, final_x)
+            lc.cur_y = final_y
+            lc.cur_x = final_x
 
     if lc.cur_attr != LC_ATTR_NONE:
         _append_attr(out, LC_ATTR_NONE)
@@ -259,3 +332,10 @@ def lc_wrefresh(win: Optional[LCWin]) -> int:
 
     _flush(out)
     return 0
+
+
+def lc_wrefresh(win: Optional[LCWin]) -> int:
+    rc = lc_wnoutrefresh(win)
+    if rc != 0:
+        return rc
+    return lc_doupdate()
