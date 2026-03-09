@@ -1,7 +1,9 @@
 # UI Contract
 
 This document describes the intended UI-layer contract for vtpy.
-It does not describe the current low-level terminal core in full detail. It describes the next stable layer that should sit above the existing window, input, and refresh machinery.
+It does not redefine the current low-level terminal core. That core should be
+described by `lc_contract.md`. This document describes the next stable layer
+that should sit above the existing window, input, and refresh machinery.
 
 The purpose is simple:
 
@@ -11,6 +13,8 @@ The purpose is simple:
 - provide a reference model for a future OS-native text UI runtime
 
 ## 1. Scope
+
+This document is layered on top of `lc_contract.md`.
 
 This contract covers the UI layer above the current core:
 
@@ -31,7 +35,8 @@ This contract does not redefine:
 - low-level cell storage
 - low-level diff rendering
 
-Those remain core concerns.
+Those remain core concerns and should keep the meanings defined by
+`lc_contract.md`.
 
 ## 2. Architectural position
 
@@ -41,6 +46,8 @@ The intended stack is:
 - core terminal layer: screen state, cells, windows, refresh, key decoding
 - UI layer: views, focus, layout, command routing, redraw policy
 - application layer: editor, file manager, shell UI, monitor, installer, debugger, and so on
+
+The core/UI boundary should remain explicit.
 
 The UI layer must depend on the core.
 The core must not depend on the UI layer.
@@ -73,7 +80,8 @@ At least for the first serious version, the UI layer is not trying to be:
 - a generic desktop GUI abstraction
 - a full curses compatibility shim
 
-The model should stay text-first, pane-first, and command-first.
+The model should stay text-first, pane-first, and command-first, while
+remaining honest about current core constraints.
 
 ## 5. Core UI concepts
 
@@ -239,8 +247,10 @@ The existing `LC_KEY_RESIZE` should become a UI-visible structural event, not ju
 Applications should be able to treat resize as:
 
 - layout invalidation
-- subview rebuild trigger
+- subview binding rebuild trigger
 - full redraw request
+
+Concrete `LCWin` bindings may be rebuilt freely as long as logical view identity survives.
 
 ## 7.4 Event routing
 
@@ -324,7 +334,8 @@ Focusable views should support conceptual hooks like:
 - `on_focus_enter()`
 - `on_focus_leave()`
 
-These should update internal state and invalidation, not perform random immediate refreshes.
+These should update internal state and invalidation, not perform random
+immediate refreshes or bypass root commit.
 
 ## 10. Invalidation contract
 
@@ -351,13 +362,19 @@ Do not need all of them on day one, but the model should allow them.
 ## 10.2 Commit rule
 
 The root runtime commits visual state.
-That matches the current root-oriented refresh coherence rule.
+That must stay aligned with the core refresh contract described in
+`lc_contract.md`.
 
 In practice:
 
-- views draw into the shared backing model
-- the root runtime decides when to call `lc_refresh()` or equivalent root refresh
+- views draw into the shared backing model or into runtime-supplied drawing
+  targets derived from it
+- the root runtime decides when to call `lc_refresh()` or equivalent root
+  refresh
 - derived view refresh should not become the main semantic path
+- view-local invalidation must not be confused with terminal staleness
+- UI redraw scheduling should treat core window dirty metadata as local staging
+  debt, not as a full presentation-truth signal
 
 That keeps the UI contract aligned with the current engine truth instead of fighting it.
 
@@ -400,7 +417,7 @@ rather than a large constraint system.
 On resize:
 
 - root layout recomputes
-- stale derived windows are rebuilt
+- stale derived windows are rebuilt as runtime bindings
 - focus is preserved if the focused logical view survives
 - otherwise focus falls back deterministically
 
@@ -416,7 +433,7 @@ Better rule:
 - container/root code may derive subwindows when useful
 - subwindows are an implementation tool, not the whole UI identity
 
-That matters because your current resize semantics intentionally invalidate derived windows.
+That matters because current resize semantics intentionally invalidate derived windows.
 So logical views must outlive the current concrete subwindow objects.
 
 This is a big design point.
@@ -425,6 +442,8 @@ If you want something tvision-like later, think:
 
 - view identity is stable
 - backing `LCWin` bindings are rebuildable runtime resources
+- root commit remains the coherent presentation path
+- concrete subwindows participate in local staging, not independent presentation truth
 
 not:
 
@@ -459,7 +478,8 @@ The following should stay out of `lc_screen.py`, `lc_refresh.py`, and the backen
 - key binding policy beyond low-level decode
 
 The core should remain a terminal runtime.
-The UI layer should be the first place where application semantics appear.
+The UI layer should be the first place where application semantics appear,
+without redefining core refresh, resize, or backing-store truth.
 
 ## 15. What to keep out of the first UI version
 
@@ -500,4 +520,7 @@ If I were structuring the next phase, I would do it in this order:
 
 ## 18. One-line summary
 
-A small, explicit, text-first UI runtime layered above vtpy core, where logical views, focus, commands, layout, and redraw are stable contracts, while concrete terminal surfaces remain rebuildable implementation details.
+A small, explicit, text-first UI runtime layered above vtpy core, where
+logical views, focus, commands, layout, and redraw are stable contracts, while
+concrete terminal surfaces remain rebuildable implementation details under the
+core's staged-refresh and resize-rebuild truth.
