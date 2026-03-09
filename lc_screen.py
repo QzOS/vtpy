@@ -1,6 +1,6 @@
 import sys
 from contextlib import contextmanager, suppress
-from typing import Optional, TYPE_CHECKING, Callable
+from typing import Optional, TYPE_CHECKING
 
 from lc_geometry import (
     lc_panel_content_rect as _lc_panel_content_rect,
@@ -144,14 +144,6 @@ def _backend_is_live() -> bool:
     return bool(lc.backend_started)
 
 
-def _dispatch_call(func: Callable, *args, **kwargs):
-    return func(*args, **kwargs)
-
-
-def _dispatch_backend_rc(func, *args, **kwargs) -> int:
-    return func(lc, *args, **kwargs)
-
-
 def _set_runtime_flag(name: str, value: bool) -> int:
     if not lc.session_active and _backend_is_live():
         return -1
@@ -159,8 +151,8 @@ def _set_runtime_flag(name: str, value: bool) -> int:
     return 0
 
 
-def _dispatch_geometry(func: Callable, *args, **kwargs):
-    return _dispatch_call(func, *args, **kwargs)
+def _dispatch_backend_rc(func, *args, **kwargs) -> int:
+    return func(lc, *args, **kwargs)
 
 
 def _reset_render_cache(rows: int, cols: int) -> None:
@@ -363,25 +355,11 @@ def lc_panel_header_subwindow_from(
 
 
 def lc_get_panel_header_rect(y: int, x: int, height: int, width: int, header_height: int = 1) -> tuple[int, int, int, int]:
-    return _dispatch_geometry(
-        _lc_panel_header_rect,
-        y,
-        x,
-        height,
-        width,
-        header_height,
-    )
+    return _lc_panel_header_rect(y, x, height, width, header_height)
 
 
 def lc_get_panel_content_rect(y: int, x: int, height: int, width: int, header_height: int = 0) -> tuple[int, int, int, int]:
-    return _dispatch_geometry(
-        _lc_panel_content_rect,
-        y,
-        x,
-        height,
-        width,
-        header_height,
-    )
+    return _lc_panel_content_rect(y, x, height, width, header_height)
 
 
 def lc_rect_split_vertical(
@@ -391,14 +369,7 @@ def lc_rect_split_vertical(
     width: int,
     top_height: int,
 ) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
-    return _dispatch_geometry(
-        _lc_rect_split_vertical,
-        y,
-        x,
-        height,
-        width,
-        top_height,
-    )
+    return _lc_rect_split_vertical(y, x, height, width, top_height)
 
 
 def lc_rect_split_horizontal(
@@ -408,14 +379,7 @@ def lc_rect_split_horizontal(
     width: int,
     left_width: int,
 ) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
-    return _dispatch_geometry(
-        _lc_rect_split_horizontal,
-        y,
-        x,
-        height,
-        width,
-        left_width,
-    )
+    return _lc_rect_split_horizontal(y, x, height, width, left_width)
 
 
 def lc_end() -> int:

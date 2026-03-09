@@ -24,10 +24,6 @@ _REQUIRED_API = (
     "noecho",
 )
 
-# Keep this list in sync with the backend contract text below.
-_REQUIRED_API = _REQUIRED_API + ("noraw",)
-
-
 class BackendContractError(RuntimeError):
     pass
 
