@@ -36,6 +36,7 @@ The codebase is split into two broad layers.
 
 These modules define the main behavior of the library:
 
+- `lc_geometry.py` - shared clipping, rect splitting, and panel zoning helpers
 - `lc_window.py` - in-memory window and cell model, dirty tracking, drawing primitives
 - `lc_refresh.py` - diff-based screen refresh and batching
 - `lc_keys.py` - input parser from byte stream to chars/keysyms
@@ -453,7 +454,12 @@ That assumption will eventually need revision if the library moves toward seriou
 
 ## 7. Current clipping/geometry helpers
 
-Internal geometry helpers now exist to make future semantics less ad hoc:
+Internal geometry helpers now exist to make future semantics less ad hoc.
+They are now centralized in `lc_geometry.py` so the window/core layer and the
+future UI/layout layer can share one coordinate model without importing each
+other.
+
+Current helpers include:
 
 - `_clip_range()`
 - `_clip_hspan()`
@@ -463,6 +469,10 @@ Internal geometry helpers now exist to make future semantics less ad hoc:
 - `_normalize_rect_shape()`
 - `_rect_shape_to_extents()`
 - `_box_edges()`
+- `lc_rect_split_vertical()`
+- `lc_rect_split_horizontal()`
+- `lc_panel_header_rect()`
+- `lc_panel_content_rect()`
 - `_interior_rect_shape()`
 
 These are internal for now. They exist to give names to recurring rectangle logic and reduce repeated coordinate arithmetic.
@@ -562,7 +572,15 @@ The most likely near-term directions are:
 
 ### 11.1 Better panel zoning
 
-Now that panel content rects and content subwindows exist, the next logical step is to formalize optional header bands or other internal panel regions without reintroducing ad hoc coordinate math.
+Panel zoning now distinguishes between:
+
+- the outer frame
+- an optional interior header band
+- the remaining content rect below that header band
+
+The current policy is that a header band, when requested, is part of the panel
+interior and therefore shifts the content origin downward. This makes titled
+panels and toolbar-style rows explicit instead of border-decoration only.
 
 ### 11.2 Copied-backing versus shared-backing policy
 

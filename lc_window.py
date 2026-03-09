@@ -1,5 +1,18 @@
 from dataclasses import dataclass, field
 from typing import Optional
+from lc_geometry import (
+    _box_edges,
+    _clip_hspan,
+    _clip_range,
+    _clip_rect_extents,
+    _clip_rect_shape as _clip_rect_shape_geom,
+    _clip_vspan,
+    _interior_rect_shape,
+    _normalize_rect_shape,
+    _rect_shape_to_extents,
+    lc_panel_content_rect,
+    lc_panel_header_rect,
+)
 from lc_term import LC_DIRTY, LC_FORCEPAINT, LC_ATTR_NONE
 
 
@@ -161,92 +174,45 @@ def _mark_window_dirty_rows(
     for y in range(ys, ye):
         _mark_window_dirty_span(win, y, start, end)
 
-
-def _clip_range(start: int, length: int, limit: int) -> tuple[int, int]:
-    if length <= 0 or limit <= 0:
-        return 0, 0
-
-    end = start + length
-    if end <= 0 or start >= limit:
-        return 0, 0
-
-    if start < 0:
-        start = 0
-    if end > limit:
-        end = limit
-    if start >= end:
-        return 0, 0
-    return start, end
-
-
-def _rect_shape_to_extents(y: int, x: int, height: int, width: int) -> tuple[int, int, int, int]:
-    if height <= 0 or width <= 0:
-        return y, x, y, x
-    return y, x, y + height, x + width
-
-
-def _clip_hspan(win: Optional[LCWin], y: int, x: int, width: int) -> tuple[Optional[LCRow], int, int]:
+def _clip_hspan_win(win: Optional[LCWin], y: int, x: int, width: int) -> tuple[Optional[LCRow], int, int]:
     if win is None:
         return None, 0, 0
     if y < 0 or y >= win.maxy:
         return None, 0, 0
-    start, end = _clip_range(x, width, win.maxx)
+    start, end = _clip_hspan(win.maxx, x, width)
     if start >= end:
         return None, 0, 0
     return win.lines[y], start, end
 
 
-def _clip_vspan(win: Optional[LCWin], y: int, x: int, height: int) -> tuple[int, int]:
+def _clip_vspan_win(win: Optional[LCWin], y: int, x: int, height: int) -> tuple[int, int]:
     if win is None:
         return 0, 0
     if x < 0 or x >= win.maxx:
         return 0, 0
-    return _clip_range(y, height, win.maxy)
+    return _clip_vspan(win.maxy, y, height)
 
 
-def _clip_rect_extents(win: Optional[LCWin], y0: int, x0: int, y1: int, x1: int) -> tuple[int, int, int, int]:
+def _clip_rect_extents_win(win: Optional[LCWin], y0: int, x0: int, y1: int, x1: int) -> tuple[int, int, int, int]:
     if win is None:
         return 0, 0, 0, 0
-    if y0 >= y1 or x0 >= x1:
-        return 0, 0, 0, 0
-
-    ys, ye = _clip_range(y0, y1 - y0, win.maxy)
-    xs, xe = _clip_range(x0, x1 - x0, win.maxx)
-    if ys >= ye or xs >= xe:
-        return 0, 0, 0, 0
-    return ys, xs, ye, xe
+    return _clip_rect_extents(win.maxy, win.maxx, y0, x0, y1, x1)
 
 
-def _clip_rect_shape(
+def _clip_rect_shape_win(
     win: Optional[LCWin],
     y: int,
     x: int,
     height: int,
     width: int,
 ) -> tuple[int, int, int, int]:
-    y0, x0, y1, x1 = _rect_shape_to_extents(y, x, height, width)
-    return _clip_rect_extents(win, y0, x0, y1, x1)
+    if win is None:
+        return 0, 0, 0, 0
+    return _clip_rect_shape_geom(win.maxy, win.maxx, y, x, height, width)
 
 
-def _normalize_rect_shape(y: int, x: int, height: int, width: int) -> tuple[int, int, int, int]:
-    if height <= 0 or width <= 0:
-        return y, x, 0, 0
-    return y, x, height, width
-
-
-def _box_edges(y: int, x: int, height: int, width: int) -> tuple[int, int, int, int]:
-    top = y
-    left = x
-    bottom = y + height - 1  # inclusive
-    right = x + width - 1    # inclusive
-    return top, left, bottom, right
-
-
-def _interior_rect_shape(y: int, x: int, height: int, width: int) -> tuple[int, int, int, int]:
-    y, x, height, width = _normalize_rect_shape(y, x, height, width)
-    if height <= 2 or width <= 2:
-        return y + 1, x + 1, 0, 0
-    return y + 1, x + 1, height - 2, width - 2
+def _clip_rect_shape(win: Optional[LCWin], y: int, x: int, height: int, width: int) -> tuple[int, int, int, int]:
+    return _clip_rect_shape_win(win, y, x, height, width)
 
 
 def _store_cell_unchecked(win: LCWin, y: int, x: int, ch: str, attr: int) -> None:
@@ -341,7 +307,7 @@ def _write_text_clipped(
     if not text:
         return 0
 
-    ln, start, end = _clip_hspan(win, y, x, len(text))
+    ln, start, end = _clip_hspan_win(win, y, x, len(text))
     if ln is None or start >= end:
         return 0
 
@@ -592,6 +558,7 @@ def lc_panel_subwin(
     x: int,
     height: int,
     width: int,
+    header_height: int = 0,
 ) -> Optional[LCWin]:
     if _require_valid_window(parent) != 0:
         return None
@@ -600,15 +567,32 @@ def lc_panel_subwin(
     if height <= 0 or width <= 0:
         return None
 
-    inner_y, inner_x, inner_h, inner_w = _interior_rect_shape(y, x, height, width)
+    inner_y, inner_x, inner_h, inner_w = lc_panel_content_rect(y, x, height, width, header_height)
     if inner_h <= 0 or inner_w <= 0:
         return None
 
     return lc_subwin(parent, inner_h, inner_w, inner_y, inner_x)
 
+def lc_panel_header_subwin(
+    parent: Optional[LCWin],
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+    header_height: int = 1,
+) -> Optional[LCWin]:
+    if _require_valid_window(parent) != 0:
+        return None
 
-def lc_panel_content_rect(y: int, x: int, height: int, width: int) -> tuple[int, int, int, int]:
-    return _interior_rect_shape(y, x, height, width)
+    y, x, height, width = _normalize_rect_shape(y, x, height, width)
+    if height <= 0 or width <= 0:
+        return None
+
+    header_y, header_x, header_h, header_w = lc_panel_header_rect(y, x, height, width, header_height)
+    if header_h <= 0 or header_w <= 0:
+        return None
+
+    return lc_subwin(parent, header_h, header_w, header_y, header_x)
 
 
 def _detach_from_parent(win: LCWin) -> None:
@@ -799,7 +783,7 @@ def _fill_rect_extents_clipped(
     if not ch:
         return
 
-    ys, xs, ye, xe = _clip_rect_extents(win, y0, x0, y1, x1)
+    ys, xs, ye, xe = _clip_rect_extents_win(win, y0, x0, y1, x1)
     if ys >= ye or xs >= xe:
         return
 
@@ -821,7 +805,7 @@ def _fill_rect_shape_clipped(
     if not ch:
         return
 
-    ys, xs, ye, xe = _clip_rect_shape(win, y, x, height, width)
+    ys, xs, ye, xe = _clip_rect_shape_win(win, y, x, height, width)
     if ys >= ye or xs >= xe:
         return
 
@@ -837,7 +821,7 @@ def _draw_hline_shape_clipped(
     ch: str,
     attr: int,
 ) -> int:
-    ln, start, end = _clip_hspan(win, y, x, width)
+    ln, start, end = _clip_hspan_win(win, y, x, width)
     if ln is None or start >= end:
         return 0
     _write_hspan(win, y, start, end, ch, attr)
@@ -1020,7 +1004,7 @@ def lc_wdraw_vline(
     if height <= 0:
         return 0
 
-    start, end = _clip_vspan(win, y, x, height)
+    start, end = _clip_vspan_win(win, y, x, height)
     if start >= end:
         return 0
 
@@ -1125,6 +1109,7 @@ def lc_wdraw_panel(
     height: int,
     width: int,
     title: Optional[str] = None,
+    header_height: int = 0,
     frame_attr: int = LC_ATTR_NONE,
     fill: Optional[str] = None,
     fill_attr: int = LC_ATTR_NONE,
@@ -1138,17 +1123,34 @@ def lc_wdraw_panel(
     if _require_live_window(win) != 0:
         return -1
 
+    if isinstance(frame_attr, str):
+        shifted_fill_attr = fill if isinstance(fill, int) else fill_attr
+        shifted_fill = frame_attr
+        shifted_frame_attr = header_height if isinstance(header_height, int) else LC_ATTR_NONE
+        header_height = 0
+        frame_attr = shifted_frame_attr
+        fill = shifted_fill
+        fill_attr = shifted_fill_attr
+
+    if title is not None and title != "" and header_height <= 0:
+        header_height = 1
+
     rc = lc_wdraw_box(win, y, x, height, width, frame_attr, hch, vch, tl, tr, bl, br)
     if rc != 0:
         return rc
 
     if title is not None and title != "":
-        rc = lc_wdraw_box_title(win, y, x, height, width, title, frame_attr)
+        header_y, header_x, header_h, header_w = lc_panel_header_rect(y, x, height, width, header_height)
+        if header_h > 0 and header_w > 0:
+            label = f" {title} "
+            rc = _write_text_clipped(win, header_y, header_x, label[:header_w], frame_attr)
+        else:
+            rc = lc_wdraw_box_title(win, y, x, height, width, title, frame_attr)
         if rc != 0:
             return rc
 
     if fill is not None:
-        inner_y, inner_x, inner_h, inner_w = _interior_rect_shape(y, x, height, width)
+        inner_y, inner_x, inner_h, inner_w = lc_panel_content_rect(y, x, height, width, header_height)
         if inner_h > 0 and inner_w > 0:
             rc = lc_wfill(win, inner_y, inner_x, inner_h, inner_w, fill, fill_attr)
             if rc != 0:
