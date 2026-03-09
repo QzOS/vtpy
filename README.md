@@ -378,7 +378,7 @@ subwindow contract above.
 The refresh model also supports a staged two-phase path:
 
 - `lc_wnoutrefresh(win)` copies the currently dirty visible portion of `win`
-  into a global desired-screen buffer
+  into the global desired-screen buffer
 - `lc_doupdate()` compares that desired screen against the cached physical
   screen image and emits only terminal changes
 
@@ -673,7 +673,7 @@ It is not treated as a synthetic panel and is not bound through a fake
 panel-content subwindow. This keeps the model explicit:
 
 - root layout is a logical UI concern
-- root binding is a runtime concern
+- root binding is a runtime/runtime-screen concern
 - panel/content semantics belong only to views that actually choose panel-like
   layout or framing
 
