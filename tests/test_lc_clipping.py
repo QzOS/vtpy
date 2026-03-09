@@ -290,14 +290,14 @@ def test_wdraw_panel_draws_frame_title_and_fill():
     win = lc_new(5, 12, 0, 0)
     assert lc_wdraw_panel(win, 0, 0, 5, 12, "hdr", 7, ".", 3) == 0
 
-    assert _row_text(win, 0) == "+ hdr -----+"
-    assert _row_text(win, 1) == "|..........|"
+    assert _row_text(win, 0) == "+----------+"
+    assert _row_text(win, 1) == "| hdr      |"
     assert _row_text(win, 2) == "|..........|"
     assert _row_text(win, 3) == "|..........|"
     assert _row_text(win, 4) == "+----------+"
 
-    assert win.lines[0].line[1].attr == 7
-    assert win.lines[1].line[1].attr == 3
+    assert win.lines[1].line[1].attr == 7
+    assert win.lines[2].line[1].attr == 3
     assert win.lines[3].line[10].attr == 3
 
 
@@ -324,7 +324,7 @@ def test_wdraw_panel_fill_only_uses_interior():
 def test_wdraw_panel_clips_like_box():
     win = lc_new(4, 6, 0, 0)
     assert lc_wdraw_panel(win, 0, 3, 4, 6, "t", 2, ".", 4) == 0
-    assert _row_text(win, 0) == "   + t"
-    assert _row_text(win, 1) == "   |.."
+    assert _row_text(win, 0) == "   +--"
+    assert _row_text(win, 1) == "   | t"
     assert _row_text(win, 2) == "   |.."
     assert _row_text(win, 3) == "   +--"

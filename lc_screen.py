@@ -2,6 +2,13 @@ import sys
 from contextlib import contextmanager, suppress
 from typing import Optional, TYPE_CHECKING
 
+from lc_geometry import (
+    lc_panel_content_rect as _lc_panel_content_rect,
+    lc_panel_header_rect as _lc_panel_header_rect,
+    lc_rect_split_horizontal as _lc_rect_split_horizontal,
+    lc_rect_split_vertical as _lc_rect_split_vertical,
+)
+
 from lc_term import (
     LC_ATTR_NONE,
     LC_DIRTY,
@@ -15,7 +22,7 @@ from lc_window import (
     lc_free,
     lc_wfill,
     lc_mvwaddstr,
-    lc_panel_content_rect,
+    lc_panel_header_subwin,
     lc_panel_subwin,
     lc_new,
     lc_invalidate_children,
@@ -256,15 +263,38 @@ def lc_subwindow_from(
     return lc_subwin(parent, nlines, ncols, begin_y, begin_x)
 
 
+def _lc_panel_subwin_from_window(
+    parent: Optional[LCWin],
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+    header_height: int = 0,
+) -> Optional[LCWin]:
+    return lc_panel_subwin(parent, y, x, height, width, header_height)
+
+
+def _lc_panel_header_subwin_from_window(
+    parent: Optional[LCWin],
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+    header_height: int = 1,
+) -> Optional[LCWin]:
+    return lc_panel_header_subwin(parent, y, x, height, width, header_height)
+
+
 def lc_panel_content_subwindow(
     y: int,
     x: int,
     height: int,
     width: int,
+    header_height: int = 0,
 ) -> Optional[LCWin]:
     if lc.stdscr is None or (not lc.session_active and _backend_is_live()):
         return None
-    return lc_panel_subwin(lc.stdscr, y, x, height, width)
+    return _lc_panel_subwin_from_window(lc.stdscr, y, x, height, width, header_height)
 
 
 def lc_panel_content_subwindow_from(
@@ -273,12 +303,48 @@ def lc_panel_content_subwindow_from(
     x: int,
     height: int,
     width: int,
+    header_height: int = 0,
 ) -> Optional[LCWin]:
-    return lc_panel_subwin(parent, y, x, height, width)
+    return _lc_panel_subwin_from_window(parent, y, x, height, width, header_height)
 
 
-def lc_get_panel_content_rect(y: int, x: int, height: int, width: int) -> tuple[int, int, int, int]:
-    return lc_panel_content_rect(y, x, height, width)
+def lc_panel_header_subwindow(
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+    header_height: int = 1,
+) -> Optional[LCWin]:
+    if lc.stdscr is None or (not lc.session_active and _backend_is_live()):
+        return None
+    return _lc_panel_header_subwin_from_window(lc.stdscr, y, x, height, width, header_height)
+
+
+def lc_panel_header_subwindow_from(
+    parent: Optional[LCWin],
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+    header_height: int = 1,
+) -> Optional[LCWin]:
+    return _lc_panel_header_subwin_from_window(parent, y, x, height, width, header_height)
+
+
+def lc_get_panel_header_rect(y: int, x: int, height: int, width: int, header_height: int = 1) -> tuple[int, int, int, int]:
+    return _lc_panel_header_rect(y, x, height, width, header_height)
+
+
+def lc_get_panel_content_rect(y: int, x: int, height: int, width: int, header_height: int = 0) -> tuple[int, int, int, int]:
+    return _lc_panel_content_rect(y, x, height, width, header_height)
+
+
+def lc_rect_split_vertical(y: int, x: int, height: int, width: int, top_height: int) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
+    return _lc_rect_split_vertical(y, x, height, width, top_height)
+
+
+def lc_rect_split_horizontal(y: int, x: int, height: int, width: int, left_width: int) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
+    return _lc_rect_split_horizontal(y, x, height, width, left_width)
 
 
 def lc_end() -> int:
@@ -651,6 +717,7 @@ def lc_draw_panel(
     height: int,
     width: int,
     title: Optional[str] = None,
+    header_height: int = 0,
     frame_attr: int = LC_ATTR_NONE,
     fill: Optional[str] = None,
     fill_attr: int = LC_ATTR_NONE,
@@ -671,6 +738,7 @@ def lc_draw_panel(
         height,
         width,
         title,
+        header_height,
         frame_attr,
         fill,
         fill_attr,
