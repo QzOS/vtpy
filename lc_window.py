@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 from typing import Optional
 from lc_geometry import (
-    _box_edges,
     _clip_hspan,
     _clip_range,
     _clip_rect_extents,
@@ -10,6 +9,7 @@ from lc_geometry import (
     _interior_rect_shape,
     _normalize_rect_shape,
     _rect_shape_to_extents,
+    _box_edges,
     lc_panel_content_rect,
     lc_panel_header_rect,
 )
@@ -50,6 +50,21 @@ class LCWin:
 
 def _is_live_window(win: Optional[LCWin]) -> bool:
     return win is not None and win.alive
+
+
+def _make_dirty_row(width: int, cells: Optional[list[LCCell]] = None) -> LCRow:
+    if width <= 0:
+        raise ValueError("width must be > 0")
+
+    if cells is None:
+        cells = [LCCell(' ', LC_ATTR_NONE) for _x in range(width)]
+
+    return LCRow(
+        line=cells,
+        firstch=0,
+        lastch=width - 1,
+        flags=LC_DIRTY | LC_FORCEPAINT,
+    )
 
 
 def _require_live_window(win: Optional[LCWin]) -> int:
@@ -173,6 +188,7 @@ def _mark_window_dirty_rows(
 
     for y in range(ys, ye):
         _mark_window_dirty_span(win, y, start, end)
+
 
 def _clip_hspan_win(win: Optional[LCWin], y: int, x: int, width: int) -> tuple[Optional[LCRow], int, int]:
     if win is None:
@@ -470,10 +486,7 @@ def lc_new(nlines: int, ncols: int, begin_y: int, begin_x: int) -> Optional[LCWi
 
     lines: list[LCRow] = []
     for _y in range(nlines):
-        row_cells = [LCCell(' ', LC_ATTR_NONE) for _x in range(ncols)]
-        row = LCRow(line=row_cells, firstch=0, lastch=ncols - 1,
-                    flags=LC_DIRTY | LC_FORCEPAINT)
-        lines.append(row)
+        lines.append(_make_dirty_row(ncols))
 
     win = LCWin(
         maxy=nlines,
@@ -489,7 +502,7 @@ def lc_new(nlines: int, ncols: int, begin_y: int, begin_x: int) -> Optional[LCWi
         alive=True,
         owns_storage=True,
         children=[],
-        lines=lines
+        lines=lines,
     )
     win.root = win
     if not _is_window_structurally_valid(win):
@@ -521,12 +534,7 @@ def lc_subwin(
     for y in range(nlines):
         parent_ln = parent.lines[begin_y + y]
         shared_cells = parent_ln.line[begin_x:begin_x + ncols]
-        row = LCRow(
-            line=shared_cells,
-            firstch=0,
-            lastch=ncols - 1,
-            flags=LC_DIRTY | LC_FORCEPAINT,
-        )
+        row = _make_dirty_row(ncols, shared_cells)
         lines.append(row)
 
     root = parent.root
@@ -572,6 +580,7 @@ def lc_panel_subwin(
         return None
 
     return lc_subwin(parent, inner_h, inner_w, inner_y, inner_x)
+
 
 def lc_panel_header_subwin(
     parent: Optional[LCWin],

@@ -1,6 +1,6 @@
 from typing import Optional
 
-from lc_term import LC_ATTR_NONE, LC_DIRTY, LC_FORCEPAINT
+from lc_term import LC_ATTR_NONE, LC_DIRTY
 from lc_window import LCCell, LCRow, LCWin
 
 LC_RENDER_BATCH_BYTES = 8192

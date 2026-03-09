@@ -18,12 +18,14 @@ _REQUIRED_API = (
     "clear_resize",
     "apply_term",
     "raw",
-    "noraw",
     "cbreak",
     "nocbreak",
     "echo",
     "noecho",
 )
+
+# Keep this list in sync with the backend contract text below.
+_REQUIRED_API = _REQUIRED_API + ("noraw",)
 
 
 class BackendContractError(RuntimeError):

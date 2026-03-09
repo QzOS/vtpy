@@ -90,7 +90,6 @@ LC_FORCEPAINT = 2
 
 
 class TermOps:
-    move_fmt = "\x1b[%d;%dH"
     clear_screen = "\x1b[2J\x1b[H"
     erase_eol = "\x1b[K"
     clear_line = "\x1b[2K"
@@ -103,6 +102,7 @@ class TermOps:
     keypad_transmit_on = "\x1b[?1h\x1b="
     keypad_transmit_off = "\x1b[?1l\x1b>"
     sgr_reset = "\x1b[0m"
+    move_fmt = "\x1b[%d;%dH"
 
 
 class Terminal:

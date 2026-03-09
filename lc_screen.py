@@ -21,7 +21,6 @@ from lc_window import (
     LCWin,
     lc_free,
     lc_wfill,
-    lc_mvwaddstr,
     lc_panel_header_subwin,
     lc_panel_subwin,
     lc_new,
@@ -35,6 +34,7 @@ from lc_window import (
     lc_wdraw_hline,
     lc_wdraw_vline,
     lc_wmove,
+    lc_mvwaddstr,
     lc_wput,
     lc_wtouchline,
     lc_wtouchwin,
@@ -119,6 +119,21 @@ def _reset_runtime_state() -> None:
     lc.session_active = False
 
 
+def _session_stdscr() -> Optional[LCWin]:
+    if lc.stdscr is None:
+        return None
+    if not lc.session_active and _backend_is_live():
+        return None
+    return lc.stdscr
+
+
+def _make_blank_screen(rows: int, cols: int) -> list[list[LCCell]]:
+    return [
+        [LCCell(' ', LC_ATTR_NONE) for _x in range(cols)]
+        for _y in range(rows)
+    ]
+
+
 def _get_stdscr() -> Optional[LCWin]:
     if not lc.session_active and _backend_is_live():
         return None
@@ -130,14 +145,8 @@ def _backend_is_live() -> bool:
 
 
 def _reset_render_cache(rows: int, cols: int) -> None:
-    lc.screen = [
-        [LCCell(' ', LC_ATTR_NONE) for _x in range(cols)]
-        for _y in range(rows)
-    ]
-    lc.vscreen = [
-        [LCCell(' ', LC_ATTR_NONE) for _x in range(cols)]
-        for _y in range(rows)
-    ]
+    lc.screen = _make_blank_screen(rows, cols)
+    lc.vscreen = _make_blank_screen(rows, cols)
     lc.vdirty_first = [-1 for _ in range(rows)]
     lc.vdirty_last = [-1 for _ in range(rows)]
     lc.cur_y = 0
@@ -248,7 +257,7 @@ def lc_init() -> Optional[LCWin]:
 
 
 def lc_subwindow(nlines: int, ncols: int, begin_y: int, begin_x: int) -> Optional[LCWin]:
-    if lc.stdscr is None or (not lc.session_active and _backend_is_live()):
+    if _session_stdscr() is None:
         return None
     return lc_subwin(lc.stdscr, nlines, ncols, begin_y, begin_x)
 
@@ -292,7 +301,7 @@ def lc_panel_content_subwindow(
     width: int,
     header_height: int = 0,
 ) -> Optional[LCWin]:
-    if lc.stdscr is None or (not lc.session_active and _backend_is_live()):
+    if _session_stdscr() is None:
         return None
     return _lc_panel_subwin_from_window(lc.stdscr, y, x, height, width, header_height)
 
@@ -315,7 +324,7 @@ def lc_panel_header_subwindow(
     width: int,
     header_height: int = 1,
 ) -> Optional[LCWin]:
-    if lc.stdscr is None or (not lc.session_active and _backend_is_live()):
+    if _session_stdscr() is None:
         return None
     return _lc_panel_header_subwin_from_window(lc.stdscr, y, x, height, width, header_height)
 
@@ -331,15 +340,29 @@ def lc_panel_header_subwindow_from(
     return _lc_panel_header_subwin_from_window(parent, y, x, height, width, header_height)
 
 
-def lc_get_panel_header_rect(y: int, x: int, height: int, width: int, header_height: int = 1) -> tuple[int, int, int, int]:
+def lc_get_panel_header_rect(
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+    header_height: int = 1,
+) -> tuple[int, int, int, int]:
     return _lc_panel_header_rect(y, x, height, width, header_height)
 
 
-def lc_get_panel_content_rect(y: int, x: int, height: int, width: int, header_height: int = 0) -> tuple[int, int, int, int]:
+def lc_get_panel_content_rect(
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+    header_height: int = 0,
+) -> tuple[int, int, int, int]:
     return _lc_panel_content_rect(y, x, height, width, header_height)
 
 
-def lc_rect_split_vertical(y: int, x: int, height: int, width: int, top_height: int) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
+def lc_rect_split_vertical(
+    y: int, x: int, height: int, width: int, top_height: int,
+) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
     return _lc_rect_split_vertical(y, x, height, width, top_height)
 
 
@@ -494,10 +517,7 @@ def lc_refresh_ensure_virtual_cache_shape() -> None:
     if lc_refresh_cache_has_shape(lc.vscreen, lc.lines, lc.cols):
         return
 
-    lc.vscreen = [
-        [LCCell(' ', LC_ATTR_NONE) for _x in range(lc.cols)]
-        for _y in range(lc.lines)
-    ]
+    lc.vscreen = _make_blank_screen(lc.lines, lc.cols)
     lc.vdirty_first = [-1 for _ in range(lc.lines)]
     lc.vdirty_last = [-1 for _ in range(lc.lines)]
     lc.virtual_cur_y = 0

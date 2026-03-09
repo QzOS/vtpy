@@ -107,7 +107,9 @@ def lc_panel_header_rect(y: int, x: int, height: int, width: int, header_height:
     header_h = _panel_header_height(inner_h, header_height)
     if header_h <= 0:
         return inner_y, inner_x, 0, 0
-    header_rect, _ = lc_rect_split_vertical(inner_y, inner_x, inner_h, inner_w, header_h)
+    header_rect, _ = lc_rect_split_vertical(
+        inner_y, inner_x, inner_h, inner_w, header_h
+    )
     return header_rect
 
 
