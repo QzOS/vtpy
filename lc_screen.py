@@ -1,6 +1,6 @@
 import sys
 from contextlib import contextmanager, suppress
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING, Callable
 
 from lc_geometry import (
     lc_panel_content_rect as _lc_panel_content_rect,
@@ -144,6 +144,25 @@ def _backend_is_live() -> bool:
     return bool(lc.backend_started)
 
 
+def _dispatch_call(func: Callable, *args, **kwargs):
+    return func(*args, **kwargs)
+
+
+def _dispatch_backend_rc(func, *args, **kwargs) -> int:
+    return func(lc, *args, **kwargs)
+
+
+def _set_runtime_flag(name: str, value: bool) -> int:
+    if not lc.session_active and _backend_is_live():
+        return -1
+    setattr(lc, name, bool(value))
+    return 0
+
+
+def _dispatch_geometry(func: Callable, *args, **kwargs):
+    return _dispatch_call(func, *args, **kwargs)
+
+
 def _reset_render_cache(rows: int, cols: int) -> None:
     lc.screen = _make_blank_screen(rows, cols)
     lc.vscreen = _make_blank_screen(rows, cols)
@@ -257,9 +276,10 @@ def lc_init() -> Optional[LCWin]:
 
 
 def lc_subwindow(nlines: int, ncols: int, begin_y: int, begin_x: int) -> Optional[LCWin]:
-    if _session_stdscr() is None:
+    stdscr = _session_stdscr()
+    if stdscr is None:
         return None
-    return lc_subwin(lc.stdscr, nlines, ncols, begin_y, begin_x)
+    return lc_subwin(stdscr, nlines, ncols, begin_y, begin_x)
 
 
 def lc_subwindow_from(
@@ -301,9 +321,10 @@ def lc_panel_content_subwindow(
     width: int,
     header_height: int = 0,
 ) -> Optional[LCWin]:
-    if _session_stdscr() is None:
+    stdscr = _session_stdscr()
+    if stdscr is None:
         return None
-    return _lc_panel_subwin_from_window(lc.stdscr, y, x, height, width, header_height)
+    return _lc_panel_subwin_from_window(stdscr, y, x, height, width, header_height)
 
 
 def lc_panel_content_subwindow_from(
@@ -324,9 +345,10 @@ def lc_panel_header_subwindow(
     width: int,
     header_height: int = 1,
 ) -> Optional[LCWin]:
-    if _session_stdscr() is None:
+    stdscr = _session_stdscr()
+    if stdscr is None:
         return None
-    return _lc_panel_header_subwin_from_window(lc.stdscr, y, x, height, width, header_height)
+    return _lc_panel_header_subwin_from_window(stdscr, y, x, height, width, header_height)
 
 
 def lc_panel_header_subwindow_from(
@@ -340,34 +362,60 @@ def lc_panel_header_subwindow_from(
     return _lc_panel_header_subwin_from_window(parent, y, x, height, width, header_height)
 
 
-def lc_get_panel_header_rect(
-    y: int,
-    x: int,
-    height: int,
-    width: int,
-    header_height: int = 1,
-) -> tuple[int, int, int, int]:
-    return _lc_panel_header_rect(y, x, height, width, header_height)
+def lc_get_panel_header_rect(y: int, x: int, height: int, width: int, header_height: int = 1) -> tuple[int, int, int, int]:
+    return _dispatch_geometry(
+        _lc_panel_header_rect,
+        y,
+        x,
+        height,
+        width,
+        header_height,
+    )
 
 
-def lc_get_panel_content_rect(
-    y: int,
-    x: int,
-    height: int,
-    width: int,
-    header_height: int = 0,
-) -> tuple[int, int, int, int]:
-    return _lc_panel_content_rect(y, x, height, width, header_height)
+def lc_get_panel_content_rect(y: int, x: int, height: int, width: int, header_height: int = 0) -> tuple[int, int, int, int]:
+    return _dispatch_geometry(
+        _lc_panel_content_rect,
+        y,
+        x,
+        height,
+        width,
+        header_height,
+    )
 
 
 def lc_rect_split_vertical(
-    y: int, x: int, height: int, width: int, top_height: int,
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+    top_height: int,
 ) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
-    return _lc_rect_split_vertical(y, x, height, width, top_height)
+    return _dispatch_geometry(
+        _lc_rect_split_vertical,
+        y,
+        x,
+        height,
+        width,
+        top_height,
+    )
 
 
-def lc_rect_split_horizontal(y: int, x: int, height: int, width: int, left_width: int) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
-    return _lc_rect_split_horizontal(y, x, height, width, left_width)
+def lc_rect_split_horizontal(
+    y: int,
+    x: int,
+    height: int,
+    width: int,
+    left_width: int,
+) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
+    return _dispatch_geometry(
+        _lc_rect_split_horizontal,
+        y,
+        x,
+        height,
+        width,
+        left_width,
+    )
 
 
 def lc_end() -> int:
@@ -539,31 +587,31 @@ def lc_refresh_physical_cache_valid() -> bool:
 
 
 def _apply_term() -> int:
-    return backend.apply_term(lc)
+    return _dispatch_backend_rc(backend.apply_term)
 
 
 def lc_raw() -> int:
-    return backend.raw(lc)
+    return _dispatch_backend_rc(backend.raw)
 
 
 def lc_noraw() -> int:
-    return backend.noraw(lc)
+    return _dispatch_backend_rc(backend.noraw)
 
 
 def lc_cbreak() -> int:
-    return backend.cbreak(lc)
+    return _dispatch_backend_rc(backend.cbreak)
 
 
 def lc_nocbreak() -> int:
-    return backend.nocbreak(lc)
+    return _dispatch_backend_rc(backend.nocbreak)
 
 
 def lc_echo() -> int:
-    return backend.echo(lc)
+    return _dispatch_backend_rc(backend.echo)
 
 
 def lc_noecho() -> int:
-    return backend.noecho(lc)
+    return _dispatch_backend_rc(backend.noecho)
 
 
 def lc_keypad(on: bool) -> int:
@@ -791,17 +839,11 @@ def lc_set_escdelay(ms: int) -> int:
 
 
 def lc_nodelay(on: bool) -> int:
-    if not lc.session_active and _backend_is_live():
-        return -1
-    lc.nodelay_on = bool(on)
-    return 0
+    return _set_runtime_flag("nodelay_on", on)
 
 
 def lc_meta_esc(on: bool) -> int:
-    if not lc.session_active and _backend_is_live():
-        return -1
-    lc.meta_on = bool(on)
-    return 0
+    return _set_runtime_flag("meta_on", on)
 
 # Bind the runtime-owned screen/session state into the refresh layer only
 # after this module has finished defining that contract surface. This avoids
