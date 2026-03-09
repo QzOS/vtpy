@@ -451,6 +451,11 @@ def lc_check_resize() -> int:
     if not resize_seen and rows == lc.lines and cols == lc.cols:
         return 0
 
+    # Resize rebuild is a runtime/topology event, not a local repaint detail.
+    # The old root backing topology is retired, all derived windows from it are
+    # invalidated, render caches are rebuilt for the replacement root, and any
+    # previously staged desired-screen intent must be treated as dead by the
+    # flush path.
     lc_invalidate_children(old)
     new_win = lc_new(rows, cols, old.begy, old.begx)
     if new_win is None:
@@ -474,11 +479,18 @@ def lc_check_resize() -> int:
 def lc_refresh_session_ready() -> bool:
     if not _backend_is_live():
         return True
+    # This answers only whether refresh may legally proceed in the current
+    # runtime/session state. It does not imply anything about dirtiness,
+    # staged desired state, or pending output.
     return bool(lc.session_active and lc.stdscr is not None)
 
 
 def lc_refresh_resize_gate() -> int:
     # Runtime-owned pre-refresh gate.
+    #
+    # This is the runtime-owned topology-validity gate for refresh. Refresh
+    # mechanics do not decide whether an old topology remains usable after
+    # resize; runtime/screen code decides that first.
     #
     # Return values:
     #   -1 : refresh cannot proceed
@@ -495,6 +507,10 @@ def lc_refresh_target_after_resize(requested: Optional["LCWin"], resize_rc: int)
 
     if resize_rc < 0:
         return None
+
+    # After a resize rebuild, refresh target resolution is topology-aware.
+    # Dead or derived windows from the retired topology are not reinterpreted
+    # as valid refresh sources.
 
     if resize_rc == 0:
         return requested

@@ -184,17 +184,26 @@ def _resolve_refresh_window(win: Optional[LCWin]) -> tuple[int, Optional[LCWin]]
     if resolved is None or not resolved.alive:
         return -1, None
 
-    # Refresh uses global physical/desired screen caches owned by the runtime.
-    # Root refresh remains the fully coherent path for the current shared-
-    # backing model; derived-window refresh is still limited to dirty state
+    # Refresh uses runtime-owned global desired/physical screen caches.
+    #
+    # Root refresh remains the fully coherent path for the current
+    # shared-backing model.
+    #
+    # A derived window stages only what its own tracked local dirty state
+    # exposes. That is intentionally weaker than root-coherent presentation for
+    # a shared-backing topology and must not be interpreted as global alias
     # tracked on that derived view.
     return 0, resolved
 
 
 def lc_wstage(win: Optional[LCWin]) -> int:
     # Stage the dirty visible portion of a window into the global desired
-    # screen. This does not write terminal output. Later staged windows may
-    # overwrite earlier desired content in overlapping regions.
+    # screen. This consumes window-local staging debt and produces desired-
+    # screen flush debt.
+    #
+    # This does not write terminal output and does not inspect or modify the
+    # physical screen cache. Later staged windows may overwrite earlier desired
+    # content in overlapping regions.
     rc, win = _resolve_refresh_window(win)
     if rc != 0 or win is None:
         return -1
@@ -236,11 +245,16 @@ def lc_wstage(win: Optional[LCWin]) -> int:
             if clipped_start < clipped_end:
                 _mark_virtual_dirty(abs_y, clipped_start, clipped_end)
 
+        # Window-row dirty metadata is local staging debt. Once this row's
+        # visible dirty span has been staged into the global desired screen,
+        # that local staging debt has been consumed for this window view.
         _clear_row_dirty(ln)
 
     final_y = win.begy + win.cury
     final_x = win.begx + win.curx
     if 0 <= final_y < _lc().lines and 0 <= final_x < _lc().cols:
+        # Cursor state here is desired-screen presentation intent. The most
+        # recently staged physically visible cursor wins.
         _lc().virtual_cur_y = final_y
         _lc().virtual_cur_x = final_x
         _lc().virtual_cursor_valid = True
@@ -251,13 +265,27 @@ def lc_wstage(win: Optional[LCWin]) -> int:
 
 
 def lc_doupdate() -> int:
-    # Two-phase flush must not emit stale staged geometry across a resize
+    # Flush consumes only desired-screen state plus the physical output cache.
+    # It must not derive output directly from windows or from root backing
+    # storage.
+    #
+    # Two-phase flush must also not emit stale staged geometry across a resize
     # rebuild. If a rebuild occurred, stdscr has already been replaced and any
     # derived topology must be rebuilt and restaged by the application.
     rc = lc_check_resize()
     if rc < 0:
         return -1
     if rc == 1:
+        # Resize before flush is a semantic discard of previously staged
+        # desired-screen intent, not merely a skipped terminal write.
+        #
+        # Desired-screen dirty state and staged cursor intent from the retired
+        # topology are dropped here. The application must restage against the
+        # rebuilt topology before a later flush.
+        _refresh_ensure_virtual_cache_shape()
+        for abs_y in range(_lc().lines):
+            _clear_virtual_dirty(abs_y)
+        _lc().virtual_cursor_valid = False
         return 0
 
     physical_reinit = False
@@ -277,6 +305,9 @@ def lc_doupdate() -> int:
     for abs_y in range(_lc().lines):
         first = _lc().vdirty_first[abs_y]
         last = _lc().vdirty_last[abs_y]
+        # Virtual dirty metadata is flush debt for desired-screen rows.
+        # A clean row here means there is no pending desired-screen work to
+        # compare against the physical output cache.
         if first < 0 or last < first:
             continue
 
@@ -316,6 +347,9 @@ def lc_doupdate() -> int:
         if len(out) >= LC_RENDER_BATCH_BYTES:
             _flush(out)
 
+        # This row's desired-screen flush debt has now been consumed.
+        # What remains is only the physical output cache plus any future
+        # desired-screen changes staged later.
         _clear_virtual_dirty(abs_y)
 
     if _lc().virtual_cursor_valid:
