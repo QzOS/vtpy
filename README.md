@@ -371,14 +371,35 @@ The root window is the fully coherent refresh source for the current
 shared-backing model.
 
 Derived-window refresh is supported only within the limits described in the
-subwindow contract above.
+subwindow contract above. In practical terms, this means:
+
+- `lc_refresh()` on `stdscr` is the fully coherent presentation path for the
+  current shared-backing model
+- `lc_wrefresh(win)` is an explicit refresh of that window view and inherits
+  only the coherence guarantees provided by that window's own tracked dirty
+  state
 
 ### Two-phase refresh support
 
 The refresh model also supports a staged two-phase path:
 
+- window dirty metadata is local staging debt
+- `lc_wnoutrefresh(win)` consumes that local staging debt for the staged rows
+  of `win`
+- `lc_wnoutrefresh(win)` writes only into the global desired-screen buffer
+- desired-screen dirty metadata is flush debt
+- `lc_doupdate()` consumes only desired-screen state plus the cached physical
+  screen image
+
+These pieces are intentionally different:
+
+- window dirty metadata is not the same thing as terminal staleness
+- the desired screen is not canonical backing-store truth
+- the physical screen cache is not backing-store truth; it is only what the
+  terminal is believed to show after the most recent successful flush
+
 - `lc_wnoutrefresh(win)` copies the currently dirty visible portion of `win`
-  into the global desired-screen buffer
+  into a global desired-screen buffer
 - `lc_doupdate()` compares that desired screen against the cached physical
   screen image and emits only terminal changes
 
@@ -390,6 +411,14 @@ This means:
   desired-screen buffer
 - the final hardware cursor position after `lc_doupdate()` follows the most
   recently staged window cursor that is physically visible
+
+More explicitly:
+
+- the desired screen is global physical-screen intent, not per-window truth
+- `lc_wnoutrefresh()` is ordering-sensitive
+- later staged windows win in overlapping desired-screen regions
+- the final hardware cursor position is also ordering-sensitive desired-screen
+  intent, not backing-store truth
 
 ### Relationship to direct refresh
 
@@ -404,10 +433,6 @@ So `lc_wrefresh()` is defined as the immediate staged-refresh path, while
 
 ### Desired-screen ordering rule
 
-The desired screen is global physical-screen intent, not per-window intent.
-
-That means:
-
 - `lc_wnoutrefresh()` is ordering-sensitive
 - if multiple windows stage overlapping regions, the later staged window wins
   for those cells in the desired screen
@@ -421,9 +446,14 @@ That means:
 That means:
 
 - if a resize rebuild is observed before `lc_doupdate()` flushes output, the
-  previously staged desired-screen content is discarded
+  previously staged desired-screen content is discarded unconditionally
+- any staged cursor intent from the retired topology is discarded with it
+- this is a semantic discard, not merely a skipped flush attempt
 - applications must rebuild any derived windows and restage against the rebuilt
   topology before the next flush
+- refresh validity after resize is determined first by the runtime/screen layer;
+  the refresh layer only stages or flushes after that validity gate has been
+  resolved
 
 ## 6. Current text model
 
