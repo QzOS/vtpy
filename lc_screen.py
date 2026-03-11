@@ -119,25 +119,24 @@ def _reset_runtime_state() -> None:
     lc.session_active = False
 
 
-def _session_stdscr() -> Optional[LCWin]:
-    if lc.stdscr is None:
-        return None
+def _active_stdscr() -> Optional[LCWin]:
+    # Backend-started but session-inactive is a half-live state. Screen-facing
+    # operations must not treat stdscr as usable there.
     if not lc.session_active and _backend_is_live():
         return None
     return lc.stdscr
+
+
+def _session_stdscr() -> Optional[LCWin]:
+    return _active_stdscr()
 
 
 def _make_blank_screen(rows: int, cols: int) -> list[list[LCCell]]:
-    return [
-        [LCCell(' ', LC_ATTR_NONE) for _x in range(cols)]
-        for _y in range(rows)
-    ]
+    return [[LCCell(' ', LC_ATTR_NONE) for _x in range(cols)] for _y in range(rows)]
 
 
 def _get_stdscr() -> Optional[LCWin]:
-    if not lc.session_active and _backend_is_live():
-        return None
-    return lc.stdscr
+    return _active_stdscr()
 
 
 def _backend_is_live() -> bool:
@@ -530,10 +529,7 @@ def lc_refresh_cache_has_shape(cache: list[list[LCCell]], rows: int, cols: int) 
 
 
 def lc_refresh_reinit_physical_cache() -> None:
-    lc.screen = [
-        [LCCell(' ', LC_ATTR_NONE) for _x in range(lc.cols)]
-        for _y in range(lc.lines)
-    ]
+    lc.screen = _make_blank_screen(lc.lines, lc.cols)
     lc.term.clear_screen()
     lc.cur_y = 0
     lc.cur_x = 0

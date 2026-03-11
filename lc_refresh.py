@@ -104,6 +104,14 @@ def _clear_virtual_dirty(abs_y: int) -> None:
     _lc().vdirty_last[abs_y] = -1
 
 
+def _clear_all_virtual_dirty() -> None:
+    for abs_y in range(_lc().lines):
+        _clear_virtual_dirty(abs_y)
+
+    # Staged cursor intent is part of desired-screen state and dies with it.
+    _lc().virtual_cursor_valid = False
+
+
 def _sync_physical_cell(abs_y: int, abs_x: int, cell: LCCell) -> None:
     scr = _lc().screen[abs_y][abs_x]
     scr.ch = cell.ch
@@ -276,16 +284,13 @@ def lc_doupdate() -> int:
     if rc < 0:
         return -1
     if rc == 1:
-        # Resize before flush is a semantic discard of previously staged
-        # desired-screen intent, not merely a skipped terminal write.
+        # Resize before flush is a semantic discard of previously staged desired
+        # intent, not merely a skipped write attempt.
         #
-        # Desired-screen dirty state and staged cursor intent from the retired
-        # topology are dropped here. The application must restage against the
-        # rebuilt topology before a later flush.
+        # The application must restage against the rebuilt topology before a
+        # later flush.
         _refresh_ensure_virtual_cache_shape()
-        for abs_y in range(_lc().lines):
-            _clear_virtual_dirty(abs_y)
-        _lc().virtual_cursor_valid = False
+        _clear_all_virtual_dirty()
         return 0
 
     physical_reinit = False

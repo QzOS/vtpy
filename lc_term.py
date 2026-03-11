@@ -1,4 +1,6 @@
+from dataclasses import dataclass
 import os
+from typing import Optional
 
 LC_OK = 0
 LC_ERR = -1
@@ -89,6 +91,7 @@ LC_DIRTY = 1
 LC_FORCEPAINT = 2
 
 
+@dataclass(frozen=True)
 class TermOps:
     clear_screen = "\x1b[2J\x1b[H"
     erase_eol = "\x1b[K"
@@ -109,7 +112,7 @@ class Terminal:
     def __init__(self) -> None:
         self.ops = TermOps()
         self.out_fd = 1
-        self._last_attr = None
+        self._last_attr: Optional[int] = None
 
     def _write_all(self, data: bytes) -> None:
         off = 0
@@ -157,16 +160,13 @@ class Terminal:
     def set_wrap(self, on: bool) -> None:
         self.write(self.ops.enable_wrap if on else self.ops.disable_wrap)
 
-    def attr_bytes(self, attr: int) -> bytes:
-        # LC_ATTR_NONE means "reset to defaults".
-        if lc_attr_is_default(attr):
-            return self.ops.sgr_reset.encode("ascii")
-
+    def _attr_sgr_parts(self, attr: int) -> list[str]:
         style = lc_attr_style(attr)
         fg_idx = lc_attr_fg(attr)
         bg_idx = lc_attr_bg(attr)
 
         parts: list[str] = ["0"]
+
         if style & LC_ATTR_BOLD:
             parts.append("1")
         if style & LC_ATTR_UNDERLINE:
@@ -182,7 +182,14 @@ class Terminal:
         if bg_sgr:
             parts.append(bg_sgr)
 
-        return ("\x1b[" + ";".join(parts) + "m").encode("ascii")
+        return parts
+
+    def attr_bytes(self, attr: int) -> bytes:
+        # LC_ATTR_NONE means "reset to defaults".
+        if lc_attr_is_default(attr):
+            return self.ops.sgr_reset.encode("ascii")
+
+        return ("\x1b[" + ";".join(self._attr_sgr_parts(attr)) + "m").encode("ascii")
 
     def set_attr(self, attr: int) -> None:
         if attr == self._last_attr:

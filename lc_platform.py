@@ -1,11 +1,13 @@
 import sys
 
+# Backend selection is intentionally tiny. Contract validation below is the
+# real guardrail.
 if sys.platform == "win32":
     import _win as backend
 else:
     import _posix as backend
 
-__all__ = ["backend"]
+__all__ = ["backend", "backend_has_api", "verify_backend", "BACKEND_CONTRACT", "BackendContractError"]
 
 _REQUIRED_API = (
     "init",
@@ -18,6 +20,7 @@ _REQUIRED_API = (
     "clear_resize",
     "apply_term",
     "raw",
+    "noraw",
     "cbreak",
     "nocbreak",
     "echo",

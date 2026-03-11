@@ -546,6 +546,12 @@ The point is not to invent more naming. The point is to make the coordinate mode
 
 ## 8. Resize model
 
+### API stability note
+
+Some public helpers may temporarily carry compatibility shims for older calling
+forms, but those shims should be isolated and named explicitly in code rather
+than embedded as ad hoc type-switching inside the main implementation path.
+
 Resize is treated as an event-like condition surfaced through the backend and consumed by the core.
 
 ### Current flow

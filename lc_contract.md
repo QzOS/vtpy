@@ -130,6 +130,7 @@ Required backend responsibilities are:
 - terminal size discovery
 - raw byte acquisition
 - one-byte pushback
+- raw/noraw and cbreak/nocbreak symmetry
 - resize observation
 - backend-owned terminal/output handle establishment before core size discovery and terminal control use
 

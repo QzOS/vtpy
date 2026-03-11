@@ -1111,6 +1111,38 @@ def lc_wdraw_box_title(
     return _write_text_clipped(win, title_y, title_x, label, attr)
 
 
+def _normalize_panel_draw_args(
+    title: Optional[str],
+    header_height: int,
+    frame_attr: int | str,
+    fill: Optional[str] | int,
+    fill_attr: int,
+) -> tuple[int, int, Optional[str], int]:
+    # Transitional compatibility shim:
+    # older callers may have passed:
+    #   lc_wdraw_panel(..., title, frame_attr_as_header_height, fill_char, fill_attr)
+    # with the fill character ending up in frame_attr by position.
+    #
+    # Keep this compatibility contained here instead of type-switching inline in
+    # the main draw path.
+    if isinstance(frame_attr, str):
+        legacy_fill = frame_attr
+        legacy_fill_attr = fill if isinstance(fill, int) else fill_attr
+        legacy_frame_attr = (
+            header_height if isinstance(header_height, int) else LC_ATTR_NONE
+        )
+
+        frame_attr = legacy_frame_attr
+        fill = legacy_fill
+        fill_attr = legacy_fill_attr
+        header_height = 0
+
+    if title is not None and title != "" and header_height <= 0:
+        header_height = 1
+
+    return header_height, int(frame_attr), fill, fill_attr
+
+
 def lc_wdraw_panel(
     win: Optional[LCWin],
     y: int,
@@ -1132,17 +1164,9 @@ def lc_wdraw_panel(
     if _require_live_window(win) != 0:
         return -1
 
-    if isinstance(frame_attr, str):
-        shifted_fill_attr = fill if isinstance(fill, int) else fill_attr
-        shifted_fill = frame_attr
-        shifted_frame_attr = header_height if isinstance(header_height, int) else LC_ATTR_NONE
-        header_height = 0
-        frame_attr = shifted_frame_attr
-        fill = shifted_fill
-        fill_attr = shifted_fill_attr
-
-    if title is not None and title != "" and header_height <= 0:
-        header_height = 1
+    header_height, frame_attr, fill, fill_attr = _normalize_panel_draw_args(
+        title, header_height, frame_attr, fill, fill_attr
+    )
 
     rc = lc_wdraw_box(win, y, x, height, width, frame_attr, hch, vch, tl, tr, bl, br)
     if rc != 0:
