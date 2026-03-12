@@ -219,9 +219,12 @@ Once the immediate correctness gaps are closed, these are the next worthwhile st
   `lc_wrefresh` remain as aliases for backward compatibility.
 
 ### Input
-- [ ] Add more explicit tests for ALT-modified input.
-- [ ] Add tests for ESC timing behavior.
-- [ ] Decide how far function-key compatibility should go across terminals.
+- [x] Add more explicit tests for ALT-modified input.
+- [x] Add tests for ESC timing behavior.
+- [x] Decide how far function-key compatibility should go across terminals.
+  Contract decision: keep a VT/xterm compatibility floor (SS3 F1-F4 and CSI
+  `~` F5-F12 as portable baseline), allow F13-F20 as best-effort when emitted,
+  and avoid terminfo-driven normalization for non-matching private encodings.
 
 ## Recent test updates
 

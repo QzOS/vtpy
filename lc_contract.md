@@ -371,6 +371,37 @@ That means:
 The key layer is still not the UI layer.
 It provides normalized terminal input, not logical command routing.
 
+### 11.1 ESC timing and Alt-prefix rule
+
+ESC (`0x1B`) handling is delay-gated and intentionally ambiguous in the same
+way real terminals are ambiguous.
+
+- if no follow-up byte is pending before `escdelay`, ESC is emitted as a plain
+  character event
+- if a follow-up byte arrives in time and does not decode as CSI/SS3, ESC
+  prefix is interpreted as Alt/Meta only when `meta_on` is enabled
+- in nodelay mode with negative `escdelay`, timeout is treated as zero for
+  disambiguation polling
+
+### 11.2 Function-key compatibility floor
+
+Function-key decoding is intentionally based on a conservative VT/xterm-style
+sequence set.
+
+Supported baseline:
+
+- SS3 F1-F4 (`ESC O P` .. `ESC O S`)
+- CSI `~` forms for F5-F12 (`ESC [ 15~`, `17~`, ... `24~`)
+- extended CSI `~` forms up to F20 where emitted by the terminal
+
+Compatibility limits:
+
+- no terminfo/termcap capability probing is performed in the core
+- non-VT private emulator encodings are not normalized unless they match the
+  supported sequence family above
+- application code should treat F1-F12 as the portable floor across terminals;
+  F13-F20 support is best-effort and emulator-dependent
+
 ## 12. What belongs above the core
 
 The following belong above the core:
