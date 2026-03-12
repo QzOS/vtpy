@@ -208,3 +208,41 @@ def test_lc_doupdate_repaints_full_desired_after_physical_cache_reinit() -> None
     payload = b''.join(fake.writes)
     assert b'A' in payload
     assert b'B' in payload
+
+
+def test_lc_wnoutrefresh_large_dirty_span_marks_only_visible_virtual_range() -> None:
+    _setup_lc(2, 6)
+    win = _make_win(2, 20)
+
+    for x in range(win.maxx):
+        win.lines[1].line[x] = LCCell(str(x % 10), LC_ATTR_NONE)
+    win.lines[1].firstch = 0
+    win.lines[1].lastch = win.maxx - 1
+    win.lines[1].flags = 1
+
+    assert lc_wnoutrefresh(win) == 0
+
+    # Virtual dirty span is clipped to the visible terminal width.
+    assert lc.vdirty_first[1] == 0
+    assert lc.vdirty_last[1] == 5
+    assert "".join(cell.ch for cell in lc.vscreen[1]) == "012345"
+
+
+def test_lc_wrefresh_clips_right_edge_for_partially_visible_window() -> None:
+    fake = _setup_lc(1, 5)
+    win = _make_win(1, 6)
+    win.begx = 2
+
+    for x, ch in enumerate("ABCDEF"):
+        win.lines[0].line[x] = LCCell(ch, LC_ATTR_NONE)
+    win.lines[0].firstch = 0
+    win.lines[0].lastch = 5
+    win.lines[0].flags = 1
+
+    assert lc_wrefresh(win) == 0
+
+    # Only the visible tail should be emitted (columns 2..4 => "ABC").
+    payload = b"".join(fake.writes)
+    assert b"ABC" in payload
+    assert b"D" not in payload
+    assert "".join(cell.ch for cell in lc.screen[0]) == "  ABC"

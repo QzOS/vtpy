@@ -196,14 +196,19 @@ Once the immediate correctness gaps are closed, these are the next worthwhile st
 - [ ] If headers become real layout regions, add helper(s) for header/body rect extraction.
 
 ### Rendering
-- [ ] Review whether dirty tracking plus hash tracking is redundant in some hot paths.
+- [x] Review whether dirty tracking plus hash tracking is redundant in some hot paths.
+  Current state: the refresh path now relies on explicit window dirty spans and
+  desired-screen dirty spans (`vdirty_*`); legacy row-hash state is not part of
+  the active diff/flush decision path.
 - [ ] Decide whether future fully coherent derived refresh would require shared
   dirty metadata, a different invalidation structure, or a different window
   class rather than changing current shared-backing semantics in place.
 - [ ] Keep resize replacement explicit; do not blur invalidation of old topology
   and creation of replacement root into in-place remapping magic.
-- [ ] Consider a more explicit row-level bulk emit helper.
-- [ ] Add regression tests for large dirty spans and clipped redraws.
+- [x] Consider a more explicit row-level bulk emit helper.
+  Added `_emit_row_diff()` to centralize per-row run detection/emission in
+  `lc_refresh` and reduce duplicated flush-loop logic.
+- [x] Add regression tests for large dirty spans and clipped redraws.
 - [x] Separate refresh/session-lifecycle policy from the diff/flush path.
   `lc_screen` now owns session-validity, resize-gate, and topology-liveness
   logic through `lc_refresh_session_ready`, `lc_refresh_resize_gate`, and

@@ -180,6 +180,42 @@ def _flush_cell_run(
     _emit_run(buf, abs_y, run_start_x, text, attr)
 
 
+def _emit_row_diff(buf: bytearray, abs_y: int, start_x: int, end_x: int) -> None:
+    """Emit all changed cells in one row over a clipped span.
+
+    This helper centralizes the row-level scan/run logic so the main refresh
+    loop stays focused on row selection and dirty-state lifecycle.
+    """
+    run_start_x = -1
+    run_cells: list[LCCell] = []
+
+    for abs_x in range(start_x, end_x):
+        cell = _lc().vscreen[abs_y][abs_x]
+        scr = _lc().screen[abs_y][abs_x]
+        if scr.ch == cell.ch and scr.attr == cell.attr:
+            _flush_cell_run(buf, abs_y, run_start_x, run_cells)
+            run_start_x = -1
+            run_cells.clear()
+            continue
+
+        if not run_cells:
+            run_start_x = abs_x
+            run_cells.append(cell)
+        else:
+            prev_abs_x = run_start_x + len(run_cells) - 1
+            prev_attr = run_cells[-1].attr
+            if abs_x == prev_abs_x + 1 and cell.attr == prev_attr:
+                run_cells.append(cell)
+            else:
+                _flush_cell_run(buf, abs_y, run_start_x, run_cells)
+                run_start_x = abs_x
+                run_cells = [cell]
+
+        _sync_physical_cell(abs_y, abs_x, cell)
+
+    _flush_cell_run(buf, abs_y, run_start_x, run_cells)
+
+
 def _resolve_refresh_window(win: Optional[LCWin]) -> tuple[int, Optional[LCWin]]:
     if not _refresh_session_ready():
         return -1, None
@@ -318,34 +354,7 @@ def lc_doupdate() -> int:
 
         start_x = first
         end_x = last + 1
-        run_start_x = -1
-        run_cells: list[LCCell] = []
-
-        for abs_x in range(start_x, end_x):
-            cell = _lc().vscreen[abs_y][abs_x]
-            scr = _lc().screen[abs_y][abs_x]
-            if scr.ch == cell.ch and scr.attr == cell.attr:
-                _flush_cell_run(out, abs_y, run_start_x, run_cells)
-                run_start_x = -1
-                run_cells.clear()
-                continue
-
-            if not run_cells:
-                run_start_x = abs_x
-                run_cells.append(cell)
-            else:
-                prev_abs_x = run_start_x + len(run_cells) - 1
-                prev_attr = run_cells[-1].attr
-                if abs_x == prev_abs_x + 1 and cell.attr == prev_attr:
-                    run_cells.append(cell)
-                else:
-                    _flush_cell_run(out, abs_y, run_start_x, run_cells)
-                    run_start_x = abs_x
-                    run_cells = [cell]
-
-            _sync_physical_cell(abs_y, abs_x, cell)
-
-        _flush_cell_run(out, abs_y, run_start_x, run_cells)
+        _emit_row_diff(out, abs_y, start_x, end_x)
 
         # Keep output writes bounded even when many rows changed.
         # This is a throughput/simplicity compromise, not a semantic boundary.
