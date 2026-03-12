@@ -185,6 +185,16 @@ fully coherent presentation path for shared-backing windows.
 
 Once the immediate correctness gaps are closed, these are the next worthwhile structural improvements.
 
+### Backend discipline
+- [x] Add backend contract semantic tests beyond API-presence checks.
+  Added assertions that `read_byte()` yields only `0..255 | None` on the
+  pushback path and that resize-only state does not make `input_pending()`
+  return true.
+- [x] Validate Windows backend byte orientation and event filtering behavior.
+  Added source-level tests that lock down `_win.py` contract text and verify
+  `_handle_console_record()` routes only translated key-byte payloads into the
+  core input byte queue (no raw `INPUT_RECORD` leakage).
+
 ### Geometry and layout
 - [ ] Add simple layout helpers for vertical and horizontal splits.
 - [ ] Consider a small rect helper module if geometry keeps growing.
